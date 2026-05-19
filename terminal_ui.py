@@ -278,8 +278,14 @@ def download_api(db_path: str) -> None:
 def download_zip(db_path: str) -> None:
     symbol = ask("Símbolo (por ejemplo BTCUSDT)")
     interval = ask("Intervalo (ej. 1m, 1h)")
-    year = int(ask("Año (ej. 2024)"))
-    month = int(ask("Mes (1-12)"))
+    year_str = ask("Año (ej. 2024)")
+    month_str = ask("Mes (1-12) o 'all' para todo el año", "all")
+    try:
+        year = int(year_str)
+    except Exception:
+        print("Año inválido. Cancelando.")
+        logger.info("Invalid year input for zip download: %s", year_str)
+        return
     batch = ask("Tamaño de lote para inserciones", "5000")
     confirm_step = ask("Presiona Enter para continuar, 'b' para volver al menú", "").lower()
     if confirm_step == "b":
@@ -307,21 +313,46 @@ def download_zip(db_path: str) -> None:
     batch_list = []
     start_time = time.time()
     try:
-        # For zip we can attempt to count rows first to provide a proper progress bar
-        rows_list = list(rows)
-        total = len(rows_list)
-        with tqdm(total=total, unit="rows", desc="Importando zip", leave=True) as pbar:
-            for row in rows_list:
-                batch_list.append(row)
-                if len(batch_list) >= int(batch):
+        months = []
+        if month_str.lower() == "all":
+            months = list(range(1, 13))
+        else:
+            try:
+                m = int(month_str)
+                if not (1 <= m <= 12):
+                    raise ValueError()
+                months = [m]
+            except Exception:
+                print("Mes inválido. Usa 1-12 o 'all'.")
+                logger.info("Invalid month input for zip download: %s", month_str)
+                return
+
+        # iterate months and import each
+        total_inserted = 0
+        for m in months:
+            logger.info("Downloading ZIP for %s %s %02d", symbol, year, m)
+            rows = downloader.download_klines_zip(symbol, interval, year, m)
+            rows_list = list(rows)
+            total = len(rows_list)
+            if total == 0:
+                print(f"No hay datos en el ZIP para {year}-{m:02d}")
+                continue
+            with tqdm(total=total, unit="rows", desc=f"Importando {year}-{m:02d}", leave=True) as pbar:
+                for row in rows_list:
+                    batch_list.append(row)
+                    if len(batch_list) >= int(batch):
+                        insert_klines(db_path, symbol, interval, batch_list)
+                        inserted += len(batch_list)
+                        total_inserted += len(batch_list)
+                        pbar.update(len(batch_list))
+                        batch_list = []
+                if batch_list:
                     insert_klines(db_path, symbol, interval, batch_list)
                     inserted += len(batch_list)
+                    total_inserted += len(batch_list)
                     pbar.update(len(batch_list))
                     batch_list = []
-            if batch_list:
-                insert_klines(db_path, symbol, interval, batch_list)
-                inserted += len(batch_list)
-                pbar.update(len(batch_list))
+        inserted = total_inserted
     except Exception as exc:
         logger.exception("Error de descarga/inserción (zip): %s", exc)
         print(f"Error de descarga/inserción: {exc}")
