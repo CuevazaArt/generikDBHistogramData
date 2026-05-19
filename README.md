@@ -13,4 +13,6 @@ Proyecto para descargar y almacenar datos de histogramas (klines) de Binance en 
 - `db.py`: helper SQLite para crear el esquema y consultar datos.
 - `service.py`: servicio HTTP local con FastAPI.
 - `reader.py`: cliente local para consultar datos desde otros servicios.
+- `backtest_cli.py`: interfaz de terminal para backtesting y optimización.
+- `backtest/`: módulos de engine, métricas, eventos, optimización y gráficas.
 - `requirements.txt`: dependencias necesarias.

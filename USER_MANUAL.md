@@ -7,8 +7,11 @@ Este manual explica cómo instalar, iniciar y usar el servicio local de descarga
 - Iniciar el servicio HTTP
 - Interfaz de terminal (UI)
 - Uso del CLI para descargas
+- Backtesting y optimización en terminal
 - Catálogo de endpoints HTTP
 - Esquema de la base de datos
+- Esquema de backtesting en DB
+- Interpretación de resultados (métricas y artefactos)
 - Ejemplos de consumo (Backtester / Optimizador / Bot)
 - Logs y auditoría
 - Buenas prácticas y límites de uso
@@ -88,9 +91,47 @@ python cli.py --mode zip --symbol BTCUSDT --interval 1m --year 2021 --month 01 -
 
 ---
 
+## Backtesting y optimización en terminal
+
+La herramienta `backtest_cli.py` permite ejecutar evaluación histórica, optimizar parámetros y revisar resultados persistidos.
+
+1) Ejecutar un backtest simple:
+
+```bash
+python backtest_cli.py --db klines.db run --symbol BTCUSDT --interval 1h --fast 10 --slow 30
+```
+
+2) Optimizar parámetros con Optuna:
+
+```bash
+python backtest_cli.py --db klines.db optimize --symbol BTCUSDT --interval 1h --study eval_opt --trials 50 --n_jobs 4
+```
+
+3) Revisar resultados:
+
+```bash
+python backtest_cli.py --db klines.db show --run_id 3
+python backtest_cli.py --db klines.db show --study eval_opt
+```
+
+4) Generar gráficas y exportaciones:
+
+```bash
+python backtest_cli.py --db klines.db plot --run_id 3 --output_dir reports
+python backtest_cli.py --db klines.db plot --study eval_opt --output_dir reports
+```
+
+5) Menú interactivo:
+
+```bash
+python backtest_cli.py --db klines.db menu
+```
+
+---
+
 ## Catálogo de endpoints HTTP
 
-Base URL: `http://127.0.0.1:8000`
+Base URL: `http://127.0.0.1:8004`
 
 - `GET /health`
   - Descripción: chequeo de salud simple.
@@ -110,7 +151,7 @@ Base URL: `http://127.0.0.1:8000`
 Ejemplo curl:
 
 ```bash
-curl "http://127.0.0.1:8000/klines?db=klines.db&symbol=BTCUSDT&interval=1h&start_ts=1609459200000&limit=100"
+curl "http://127.0.0.1:8004/klines?db=klines.db&symbol=BTCUSDT&interval=1h&start_ts=1609459200000&limit=100"
 ```
 
 ---
@@ -138,6 +179,96 @@ PK: `(symbol, interval, open_time)` — evita duplicados.
 
 ---
 
+## Esquema de backtesting en DB
+
+Además de `klines`, el sistema guarda resultados de evaluación y optimización:
+
+- `bt_runs`: metadatos de cada corrida (estrategia, rango, costos, estado, timestamps).
+- `bt_events`: bitácora paso a paso de eventos (`hold`, `fill`, `order_rejected`) con `seq`, `event_time`, estado de cartera y `payload_json`.
+- `bt_metrics`: métricas agregadas por corrida/trial (`total_return`, `max_drawdown`, etc.).
+- `bt_trials`: resultados de optimización por trial (parámetros, objetivo, estado, duración).
+- `bt_trial_metrics`: métricas detalladas por trial para análisis comparativo.
+
+---
+
+## Interpretación de resultados (métricas y artefactos)
+
+Esta sección explica exactamente los elementos que viste al validar localmente.
+
+### Backtest ejecutado
+
+- `run_id=3`: identificador único en DB para esa corrida.
+- `BTCUSDT 1h`: símbolo e intervalo usados como entrada histórica.
+- `fast=10`, `slow=30`: parámetros de la estrategia (SMA rápida/lenta).
+
+### Resultado principal
+
+- `final_equity: 9581.84`
+  - Capital final de la cuenta simulada al cierre de la corrida.
+  - Incluye caja (`cash`) + valor de posición abierta a precio de mercado final.
+
+- `total_return: -4.18%`
+  - Retorno total sobre el capital inicial.
+  - Fórmula: `(final_equity - initial_cash) / initial_cash`.
+
+- `max_drawdown: 36.79%`
+  - Mayor caída porcentual desde un pico de equity hasta un valle posterior.
+  - Mide riesgo de pérdida temporal durante la estrategia.
+
+- `sharpe: 0.0102`
+  - Relación retorno/riesgo de la curva de equity.
+  - Cerca de 0 implica señal débil ajustada por volatilidad.
+
+- `win_rate: 34.64%`
+  - Proporción de trades cerrados con PnL positivo.
+  - No implica por sí solo rentabilidad; depende también del tamaño medio de ganancia/pérdida.
+
+- `profit_factor: 1.2179`
+  - `ganancia_bruta / pérdida_bruta`.
+  - >1 significa que la estrategia ganó más de lo que perdió en agregado de trades.
+
+- `num_trades: 179`
+  - Número de trades contabilizados para métricas (cierres evaluados en PnL).
+
+### Optimización ejecutada
+
+- `study=eval_opt`: nombre lógico del experimento de Optuna.
+- `3 trials`: cantidad de configuraciones evaluadas.
+- `n_jobs=2`: ejecución paralela local en CPU con 2 workers.
+- `best_params: fast=38, slow=72`: mejor set encontrado en ese experimento.
+- `best_value: 1.123024`: valor objetivo máximo reportado por Optuna (en este MVP, `total_return`).
+
+### Persistencia confirmada en DB
+
+- Runs registrados/completados:
+  - Quedan almacenados en `bt_runs` con estado `completed/failed`.
+- Trials guardados:
+  - Se registran en `bt_trials` y métricas extendidas en `bt_trial_metrics`.
+- Eventos paso a paso:
+  - Cada barra queda auditada en `bt_events` para reconstruir decisiones y estado del portafolio.
+
+### Gráficas y exports generados en `reports/`
+
+- `reports/run_3_equity.png`
+  - Curva de equity a lo largo del tiempo (o secuencia de barras).
+
+- `reports/run_3_drawdown.png`
+  - Serie de drawdown instantáneo respecto al máximo acumulado.
+
+- `reports/run_3_returns_hist.png`
+  - Histograma de retornos por paso (distribución de retornos).
+
+- `reports/run_3_metrics.json`
+  - Snapshot serializado de métricas agregadas de la corrida.
+
+- `reports/run_3_equity.csv`
+  - Serie exportada (`seq`, `event_time`, `equity`) para análisis externo.
+
+- `reports/study_eval_opt_trials.png`
+  - Evolución del objetivo por número de trial dentro del estudio.
+
+---
+
 ## Ejemplos de consumo
 
 1) Backtester (descargar rango histórico y generar serie OHLC):
@@ -146,7 +277,7 @@ PK: `(symbol, interval, open_time)` — evita duplicados.
 import requests
 import pandas as pd
 
-resp = requests.get('http://127.0.0.1:8000/klines', params={
+resp = requests.get('http://127.0.0.1:8004/klines', params={
     'db': 'klines.db', 'symbol': 'BTCUSDT', 'interval': '1m', 'start_ts': 1609459200000
 })
 data = resp.json()
@@ -168,7 +299,7 @@ df.set_index('open_time', inplace=True)
 
 ```python
 params = {'db':'klines.db','symbol':'BTCUSDT','interval':'1m','limit':200}
-resp = requests.get('http://127.0.0.1:8000/klines', params=params)
+resp = requests.get('http://127.0.0.1:8004/klines', params=params)
 rows = resp.json()
 ```
 

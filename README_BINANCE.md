@@ -58,3 +58,39 @@ Exportar datos via HTTP:
 ```
 curl "http://127.0.0.1:8004/export?db=klines.db&symbol=BTCUSDT&interval=1h&format=csv" -o btc_1h.csv
 ```
+
+## Backtesting + Optimización (MVP)
+
+Se añadió un engine local para evaluar estrategias sobre los datos de `klines` ya almacenados.
+
+Ejecutar un backtest:
+
+```
+python backtest_cli.py --db klines.db run --symbol BTCUSDT --interval 1h --fast 10 --slow 30
+```
+
+Optimizar parámetros (Optuna + SQLite, paralelo CPU):
+
+```
+python backtest_cli.py --db klines.db optimize --symbol BTCUSDT --interval 1h --study sma_opt --trials 50 --n_jobs 4
+```
+
+Ver resultados:
+
+```
+python backtest_cli.py --db klines.db show --run_id 1
+python backtest_cli.py --db klines.db show --study sma_opt
+```
+
+Generar gráficas y exports:
+
+```
+python backtest_cli.py --db klines.db plot --run_id 1 --output_dir reports
+python backtest_cli.py --db klines.db plot --study sma_opt --output_dir reports
+```
+
+Menú interactivo de terminal:
+
+```
+python backtest_cli.py --db klines.db menu
+```
