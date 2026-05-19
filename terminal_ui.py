@@ -331,14 +331,12 @@ def download_zip(db_path: str) -> None:
         total_inserted = 0
         for m in months:
             logger.info("Downloading ZIP for %s %s %02d", symbol, year, m)
-            rows = downloader.download_klines_zip(symbol, interval, year, m)
-            rows_list = list(rows)
-            total = len(rows_list)
-            if total == 0:
-                print(f"No hay datos en el ZIP para {year}-{m:02d}")
-                continue
-            with tqdm(total=total, unit="rows", desc=f"Importando {year}-{m:02d}", leave=True) as pbar:
-                for row in rows_list:
+            rows_gen = downloader.download_klines_zip(symbol, interval, year, m)
+            # Stream rows to avoid building large lists in memory. We don't know total upfront.
+            any_row = False
+            with tqdm(unit="rows", desc=f"Importando {year}-{m:02d}", leave=True) as pbar:
+                for row in rows_gen:
+                    any_row = True
                     batch_list.append(row)
                     if len(batch_list) >= int(batch):
                         insert_klines(db_path, symbol, interval, batch_list)
@@ -346,12 +344,18 @@ def download_zip(db_path: str) -> None:
                         total_inserted += len(batch_list)
                         pbar.update(len(batch_list))
                         batch_list = []
+                    else:
+                        pbar.update(1)
                 if batch_list:
                     insert_klines(db_path, symbol, interval, batch_list)
                     inserted += len(batch_list)
                     total_inserted += len(batch_list)
                     pbar.update(len(batch_list))
                     batch_list = []
+            if not any_row:
+                print(f"No hay datos en el ZIP para {year}-{m:02d}")
+            # polite pause between monthly downloads to respect remote service
+            time.sleep(0.5)
         inserted = total_inserted
     except Exception as exc:
         logger.exception("Error de descarga/inserción (zip): %s", exc)
