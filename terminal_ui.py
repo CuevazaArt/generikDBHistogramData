@@ -2,6 +2,7 @@
 import sys
 from typing import Optional
 from db import init_db, query_klines, insert_klines
+import sqlite3
 from binance_hist_downloader import BinanceDownloader
 from datetime import datetime
 import time
@@ -46,10 +47,38 @@ def parse_timestamp(text: str) -> Optional[int]:
             return None
 
 
+def get_db_min_max(db_path: str, symbol: str, interval: str) -> Optional[tuple]:
+    """Return (min_open_time, max_open_time) for symbol/interval in DB, or None if no rows."""
+    try:
+        conn = sqlite3.connect(db_path)
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT MIN(open_time), MAX(open_time) FROM klines WHERE symbol=? AND interval=?",
+            (symbol, interval),
+        )
+        row = cur.fetchone()
+        conn.close()
+        if row and (row[0] is not None):
+            return int(row[0]), int(row[1])
+        return None
+    except Exception:
+        return None
+
+
 def ask(prompt: str, default: Optional[str] = None) -> str:
     if default:
-        return input(f"{prompt} [{default}]: ").strip() or default
-    return input(f"{prompt}: ").strip()
+        v = input(f"{prompt} [{default}]: ").strip()
+        if v.lower() in ("exit", "quit"):
+            logger.info("User exited via prompt")
+            print("Saliendo...")
+            sys.exit(0)
+        return v or default
+    v = input(f"{prompt}: ").strip()
+    if v.lower() in ("exit", "quit"):
+        logger.info("User exited via prompt")
+        print("Saliendo...")
+        sys.exit(0)
+    return v
 
 
 def show_menu() -> None:
@@ -79,8 +108,28 @@ def query_data(db_path: str) -> None:
     start = ask("Fecha inicio (YYYY-MM-DD o timestamp ms/segundos) o vacío", "")
     end = ask("Fecha fin (YYYY-MM-DD o timestamp ms/segundos) o vacío", "")
     limit = ask("Límite de filas", "20")
-    start_ts = parse_timestamp(start) if start else None
-    end_ts = parse_timestamp(end) if end else None
+    # support preset 'all' to use full available range in DB
+    if start and start.lower() == "all":
+        rng = get_db_min_max(db_path, symbol, interval)
+        if rng:
+            start_ts = rng[0]
+            print(f"Inicio ajustado a primer registro en DB: {start_ts}")
+        else:
+            print("No hay datos locales para 'all'.")
+            start_ts = None
+    else:
+        start_ts = parse_timestamp(start) if start else None
+
+    if end and end.lower() == "all":
+        rng = get_db_min_max(db_path, symbol, interval)
+        if rng:
+            end_ts = rng[1]
+            print(f"Fin ajustado a último registro en DB: {end_ts}")
+        else:
+            print("No hay datos locales para 'all'.")
+            end_ts = None
+    else:
+        end_ts = parse_timestamp(end) if end else None
     try:
         rows = query_klines(db_path, symbol, interval, start_ts=start_ts, end_ts=end_ts, limit=int(limit))
         if not rows:
@@ -107,8 +156,26 @@ def download_api(db_path: str) -> None:
     if confirm_step == "b":
         print("Volviendo al menú principal...")
         return
-    start_ts = parse_timestamp(start) if start else None
-    end_ts = parse_timestamp(end) if end else None
+    # support 'all' preset: use available range in DB if present
+    if start and start.lower() == "all":
+        rng = get_db_min_max(db_path, symbol, interval)
+        if rng:
+            start_ts = rng[0]
+            print(f"Inicio ajustado a primer registro en DB: {start_ts}")
+        else:
+            start_ts = None
+    else:
+        start_ts = parse_timestamp(start) if start else None
+
+    if end and end.lower() == "all":
+        rng = get_db_min_max(db_path, symbol, interval)
+        if rng:
+            end_ts = rng[1]
+            print(f"Fin ajustado a último registro en DB: {end_ts}")
+        else:
+            end_ts = None
+    else:
+        end_ts = parse_timestamp(end) if end else None
     # estimate total rows from interval and time range when possible
     interval_map = {
         "1m": 60_000,
