@@ -52,3 +52,9 @@ La ruta de salud es:
 ```
 curl http://127.0.0.1:8004/health
 ```
+
+Exportar datos via HTTP:
+
+```
+curl "http://127.0.0.1:8004/export?db=klines.db&symbol=BTCUSDT&interval=1h&format=csv" -o btc_1h.csv
+```

@@ -10,6 +10,7 @@ from tqdm import tqdm
 import logging
 import logging.handlers
 import os
+import json
 
 # Setup logging
 LOG_DIR = "logs"
@@ -26,6 +27,27 @@ if not logger.handlers:
     sh = logging.StreamHandler()
     sh.setFormatter(fmt)
     logger.addHandler(sh)
+    # JSON lines handler for ingestion
+    json_log = os.path.join(LOG_DIR, "terminal_ui.jsonl")
+    jhandler = logging.handlers.RotatingFileHandler(json_log, maxBytes=10_000_000, backupCount=3, encoding="utf-8")
+
+    class JsonFormatter(logging.Formatter):
+        def format(self, record: logging.LogRecord) -> str:
+            payload = {
+                "time": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
+                "level": record.levelname,
+                "message": record.getMessage(),
+            }
+            # include extra attributes if present
+            if hasattr(record, "args") and record.args:
+                try:
+                    payload["args"] = record.args
+                except Exception:
+                    pass
+            return json.dumps(payload, ensure_ascii=False)
+
+    jhandler.setFormatter(JsonFormatter())
+    logger.addHandler(jhandler)
 
 DB_PATH = "klines.db"
 
