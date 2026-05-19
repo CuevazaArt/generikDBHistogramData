@@ -291,42 +291,44 @@ def download_zip(db_path: str) -> None:
     if confirm_step == "b":
         print("Volviendo al menú principal...")
         return
+
+    # validate months before summary
+    if month_str.lower() == "all":
+        months = list(range(1, 13))
+        period_summary = f"{year}-all"
+    else:
+        try:
+            m = int(month_str)
+            if not (1 <= m <= 12):
+                raise ValueError()
+            months = [m]
+            period_summary = f"{year}-{m:02d}"
+        except Exception:
+            print("Mes inválido. Usa 1-12 o 'all'.")
+            logger.info("Invalid month input for zip download: %s", month_str)
+            return
+
     # summary and confirmation
     print("\n--- Resumen de descarga (ZIP mensual) ---")
     print(f"Símbolo: {symbol}")
     print(f"Intervalo: {interval}")
-    print(f"Periodo: {year}-{month:02d}")
+    print(f"Periodo: {period_summary}")
     proceed = ask("Confirmar descarga? (y=si / b=volver / cualquier otra tecla = cancelar)", "y").lower()
     if proceed == "b":
         print("Volviendo al menú principal...")
-        logger.info("User backed out before ZIP download: symbol=%s interval=%s period=%s-%s", symbol, interval, year, month)
+        logger.info("User backed out before ZIP download: symbol=%s interval=%s period=%s batch=%s", symbol, interval, period_summary, batch)
         return
     if proceed != "y":
-        logger.info("User canceled ZIP download: symbol=%s interval=%s period=%s-%s", symbol, interval, year, month)
+        logger.info("User canceled ZIP download: symbol=%s interval=%s period=%s batch=%s", symbol, interval, period_summary, batch)
         print("Descarga cancelada.")
         return
     init_db(db_path)
     downloader = BinanceDownloader()
-    logger.info("Starting ZIP download: db=%s symbol=%s interval=%s period=%s-%s batch=%s", db_path, symbol, interval, year, month, batch)
-    rows = downloader.download_klines_zip(symbol, interval, year, month)
+    logger.info("Starting ZIP download: db=%s symbol=%s interval=%s period=%s batch=%s", db_path, symbol, interval, period_summary, batch)
     inserted = 0
     batch_list = []
     start_time = time.time()
     try:
-        months = []
-        if month_str.lower() == "all":
-            months = list(range(1, 13))
-        else:
-            try:
-                m = int(month_str)
-                if not (1 <= m <= 12):
-                    raise ValueError()
-                months = [m]
-            except Exception:
-                print("Mes inválido. Usa 1-12 o 'all'.")
-                logger.info("Invalid month input for zip download: %s", month_str)
-                return
-
         # iterate months and import each
         total_inserted = 0
         for m in months:
@@ -365,11 +367,11 @@ def download_zip(db_path: str) -> None:
     print("\n--- Resumen final de la descarga ---")
     print(f"Símbolo: {symbol}")
     print(f"Intervalo: {interval}")
-    print(f"Periodo: {year}-{month:02d}")
+    print(f"Periodo: {period_summary}")
     print(f"Filas insertadas: {inserted}")
     print(f"Tiempo transcurrido: {duration:.2f}s")
     print("Recuerda respetar las políticas de uso justo de la API y del servicio de datos.")
-    logger.info("ZIP download finished: db=%s symbol=%s interval=%s period=%s-%s inserted=%d duration=%.2f", db_path, symbol, interval, year, month, inserted, duration)
+    logger.info("ZIP download finished: db=%s symbol=%s interval=%s period=%s inserted=%d duration=%.2f", db_path, symbol, interval, period_summary, inserted, duration)
 
 
 def export_data(db_path: str) -> None:
