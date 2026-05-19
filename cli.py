@@ -1,0 +1,69 @@
+"""CLI to download Binance histogram (kline) data and store it in an SQLite DB.
+
+Usage examples are in README_BINANCE.md
+"""
+import argparse
+from datetime import datetime
+from binance_hist_downloader import BinanceDownloader
+from db import init_db, insert_klines
+from dateutil import parser as dateparser
+from tqdm import tqdm
+
+
+def parse_time(s: str):
+    # Accept integer milliseconds, seconds, or ISO dates
+    try:
+        v = int(s)
+        # Heuristic: if looks like seconds (10 digits) -> convert to ms
+        if v < 1e11:
+            return int(v * 1000)
+        return int(v)
+    except Exception:
+        dt = dateparser.parse(s)
+        return int(dt.timestamp() * 1000)
+
+
+def main():
+    p = argparse.ArgumentParser(description="Descargar klines y guardarlos en sqlite")
+    p.add_argument("--mode", choices=("api", "zip"), default="api")
+    p.add_argument("--symbol", required=True)
+    p.add_argument("--interval", required=True)
+    p.add_argument("--db", default="klines.db")
+    p.add_argument("--start")
+    p.add_argument("--end")
+    p.add_argument("--year", type=int)
+    p.add_argument("--month", type=int)
+    p.add_argument("--batch", type=int, default=5000, help="Batch size for inserts")
+    args = p.parse_args()
+
+    init_db(args.db)
+    dl = BinanceDownloader()
+
+    if args.mode == "api":
+        start_ts = parse_time(args.start) if args.start else None
+        end_ts = parse_time(args.end) if args.end else None
+        it = dl.download_klines_api(args.symbol, args.interval, start_ts=start_ts, end_ts=end_ts)
+        batch = []
+        for row in tqdm(it, desc="Downloading"):
+            batch.append(row)
+            if len(batch) >= args.batch:
+                insert_klines(args.db, args.symbol, args.interval, batch)
+                batch = []
+        if batch:
+            insert_klines(args.db, args.symbol, args.interval, batch)
+    else:
+        if not args.year or not args.month:
+            raise SystemExit("--year and --month required for zip mode")
+        it = dl.download_klines_zip(args.symbol, args.interval, args.year, args.month)
+        batch = []
+        for row in tqdm(it, desc="Importing zip"):
+            batch.append(row)
+            if len(batch) >= args.batch:
+                insert_klines(args.db, args.symbol, args.interval, batch)
+                batch = []
+        if batch:
+            insert_klines(args.db, args.symbol, args.interval, batch)
+
+
+if __name__ == "__main__":
+    main()
