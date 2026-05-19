@@ -23,6 +23,12 @@ from reader import query
 rows = query("klines.db", "BTCUSDT", "1m", start_ts=1609459200000)
 ```
 
+- Interfaz de terminal interactiva:
+
+```
+python terminal_ui.py
+```
+
 - Instalar dependencias: `pip install -r requirements.txt`.
 
 ## Servicio HTTP local
