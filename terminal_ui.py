@@ -87,8 +87,9 @@ def show_menu() -> None:
     print("2) Consultar registros de klines")
     print("3) Descargar datos vía API")
     print("4) Descargar datos vía ZIP mensual")
-    print("5) Cambiar ruta de DB")
-    print("6) Salir")
+    print("5) Exportar datos desde la DB (CSV/JSON)")
+    print("6) Cambiar ruta de DB")
+    print("7) Salir")
 
 
 def show_db_info(db_path: str) -> None:
@@ -105,28 +106,28 @@ def show_db_info(db_path: str) -> None:
 def query_data(db_path: str) -> None:
     symbol = ask("Símbolo (por ejemplo BTCUSDT)")
     interval = ask("Intervalo (ej. 1m, 1h)")
-    start = ask("Fecha inicio (YYYY-MM-DD o timestamp ms/segundos) o vacío", "")
-    end = ask("Fecha fin (YYYY-MM-DD o timestamp ms/segundos) o vacío", "")
+    start = ask("Fecha inicio (YYYY-MM-DD o timestamp ms/segundos) — predef ALL (Enter)", "predef ALL")
+    end = ask("Fecha fin (YYYY-MM-DD o timestamp ms/segundos) — predef ALL (Enter)", "predef ALL")
     limit = ask("Límite de filas", "20")
-    # support preset 'all' to use full available range in DB
-    if start and start.lower() == "all":
+    # support preset by pressing Enter (default 'predef ALL') to use full available range in DB
+    if start == "predef ALL":
         rng = get_db_min_max(db_path, symbol, interval)
         if rng:
             start_ts = rng[0]
             print(f"Inicio ajustado a primer registro en DB: {start_ts}")
         else:
-            print("No hay datos locales para 'all'.")
+            print("No hay datos locales para 'ALL'.")
             start_ts = None
     else:
         start_ts = parse_timestamp(start) if start else None
 
-    if end and end.lower() == "all":
+    if end == "predef ALL":
         rng = get_db_min_max(db_path, symbol, interval)
         if rng:
             end_ts = rng[1]
             print(f"Fin ajustado a último registro en DB: {end_ts}")
         else:
-            print("No hay datos locales para 'all'.")
+            print("No hay datos locales para 'ALL'.")
             end_ts = None
     else:
         end_ts = parse_timestamp(end) if end else None
@@ -148,8 +149,8 @@ def query_data(db_path: str) -> None:
 def download_api(db_path: str) -> None:
     symbol = ask("Símbolo (por ejemplo BTCUSDT)")
     interval = ask("Intervalo (ej. 1m, 1h)")
-    start = ask("Fecha inicio (YYYY-MM-DD o timestamp ms/segundos) o vacío", "")
-    end = ask("Fecha fin (YYYY-MM-DD o timestamp ms/segundos) o vacío", "")
+    start = ask("Fecha inicio (YYYY-MM-DD o timestamp ms/segundos) — predef ALL (Enter)", "predef ALL")
+    end = ask("Fecha fin (YYYY-MM-DD o timestamp ms/segundos) — predef ALL (Enter)", "predef ALL")
     batch = ask("Tamaño de lote para inserciones", "5000")
     # allow user to step back
     confirm_step = ask("Presiona Enter para continuar, 'b' para volver al menú", "").lower()
@@ -157,7 +158,7 @@ def download_api(db_path: str) -> None:
         print("Volviendo al menú principal...")
         return
     # support 'all' preset: use available range in DB if present
-    if start and start.lower() == "all":
+    if start == "predef ALL":
         rng = get_db_min_max(db_path, symbol, interval)
         if rng:
             start_ts = rng[0]
@@ -167,7 +168,7 @@ def download_api(db_path: str) -> None:
     else:
         start_ts = parse_timestamp(start) if start else None
 
-    if end and end.lower() == "all":
+    if end == "predef ALL":
         rng = get_db_min_max(db_path, symbol, interval)
         if rng:
             end_ts = rng[1]
@@ -314,6 +315,57 @@ def download_zip(db_path: str) -> None:
     logger.info("ZIP download finished: db=%s symbol=%s interval=%s period=%s-%s inserted=%d duration=%.2f", db_path, symbol, interval, year, month, inserted, duration)
 
 
+def export_data(db_path: str) -> None:
+    import csv
+    import json
+
+    symbol = ask("Símbolo (por ejemplo BTCUSDT)")
+    interval = ask("Intervalo (ej. 1m, 1h)")
+    start = ask("Fecha inicio (YYYY-MM-DD o timestamp ms/segundos) — predef ALL (Enter)", "predef ALL")
+    end = ask("Fecha fin (YYYY-MM-DD o timestamp ms/segundos) — predef ALL (Enter)", "predef ALL")
+    fmt = ask("Formato de export (csv/json)", "csv").lower()
+    out = ask("Ruta fichero salida", f"{symbol}_{interval}.{'csv' if fmt=='csv' else 'json'}")
+
+    # resolve start/end same as query
+    if start == "predef ALL":
+        rng = get_db_min_max(db_path, symbol, interval)
+        start_ts = rng[0] if rng else None
+    else:
+        start_ts = parse_timestamp(start) if start else None
+    if end == "predef ALL":
+        rng = get_db_min_max(db_path, symbol, interval)
+        end_ts = rng[1] if rng else None
+    else:
+        end_ts = parse_timestamp(end) if end else None
+
+    try:
+        rows = query_klines(db_path, symbol, interval, start_ts=start_ts, end_ts=end_ts, limit=None)
+        if not rows:
+            print("No hay filas para exportar.")
+            logger.info("Export attempted but no rows: db=%s symbol=%s interval=%s", db_path, symbol, interval)
+            return
+        if fmt == "csv":
+            with open(out, "w", newline='', encoding='utf-8') as fh:
+                writer = csv.writer(fh)
+                # header
+                writer.writerow(["symbol","interval","open_time","open","high","low","close","volume","close_time","quote_asset_volume","num_trades","taker_buy_base","taker_buy_quote","ignore_field"])
+                for r in rows:
+                    writer.writerow(r)
+        else:
+            # json
+            objs = []
+            keys = ["symbol","interval","open_time","open","high","low","close","volume","close_time","quote_asset_volume","num_trades","taker_buy_base","taker_buy_quote","ignore_field"]
+            for r in rows:
+                objs.append({k: v for k, v in zip(keys, r)})
+            with open(out, "w", encoding='utf-8') as fh:
+                json.dump(objs, fh, ensure_ascii=False, indent=2)
+        print(f"Export completado: {out} ({len(rows)} filas)")
+        logger.info("Export completed: %s rows=%d format=%s", out, len(rows), fmt)
+    except Exception as exc:
+        logger.exception("Error exporting data: %s", exc)
+        print(f"Error exportando datos: {exc}")
+
+
 def main() -> None:
     db_path = DB_PATH
     init_db(db_path)
@@ -330,11 +382,13 @@ def main() -> None:
         elif choice == "4":
             download_zip(db_path)
         elif choice == "5":
+            export_data(db_path)
+        elif choice == "6":
             db_path = ask("Nueva ruta de DB", db_path)
             init_db(db_path)
             logger.info("DB path changed to: %s", db_path)
             print(f"DB actual cambiada a: {db_path}")
-        elif choice == "6":
+        elif choice == "7":
             print("Saliendo...")
             logger.info("Exiting terminal UI")
             break

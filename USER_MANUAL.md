@@ -47,10 +47,10 @@ python service.py
 O con `uvicorn` (recomendado para despliegue local controlado):
 
 ```bash
-uvicorn service:app --host 127.0.0.1 --port 8000 --reload
+uvicorn service:app --host 127.0.0.1 --port 8004 --reload
 ```
 
-El servicio quedará disponible en `http://127.0.0.1:8000`.
+Por defecto el servicio escucha en `http://127.0.0.1:8004`.
 
 ---
 

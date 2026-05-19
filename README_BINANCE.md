@@ -39,14 +39,16 @@ Ejecuta el servicio local:
 python service.py
 ```
 
+Por defecto el servicio local escucha en el puerto `8004`.
+
 Luego consulta datos con:
 
 ```
-curl "http://127.0.0.1:8000/klines?db=klines.db&symbol=BTCUSDT&interval=1h&start_ts=1609459200000&limit=10"
+curl "http://127.0.0.1:8004/klines?db=klines.db&symbol=BTCUSDT&interval=1h&start_ts=1609459200000&limit=10"
 ```
 
 La ruta de salud es:
 
 ```
-curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8004/health
 ```
