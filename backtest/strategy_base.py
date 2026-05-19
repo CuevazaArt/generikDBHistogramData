@@ -18,6 +18,7 @@ class StrategyContext:
     candles: List[Dict[str, Any]]
     cash: float
     position_qty: float
+    avg_entry: float
     equity: float
 
 
@@ -33,6 +34,9 @@ class StrategyBase:
     def on_bar(self, ctx: StrategyContext) -> Signal:
         _ = ctx
         return Signal(action="hold")
+
+    def on_fill(self, fill: Dict[str, Any], signal: Signal, ctx: StrategyContext) -> None:
+        _ = (fill, signal, ctx)
 
     def on_finish(self) -> None:
         return None

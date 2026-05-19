@@ -95,17 +95,34 @@ python cli.py --mode zip --symbol BTCUSDT --interval 1m --year 2021 --month 01 -
 
 La herramienta `backtest_cli.py` permite ejecutar evaluación histórica, optimizar parámetros y revisar resultados persistidos.
 
+Estrategias disponibles en esta versión:
+- `dorothy` (adaptada de `aportes/dorothy.py` para backtesting local).
+- `sma_cross` (estrategia base de medias móviles).
+
 1) Ejecutar un backtest simple:
 
 ```bash
-python backtest_cli.py --db klines.db run --symbol BTCUSDT --interval 1h --fast 10 --slow 30
+python backtest_cli.py --db klines.db run --strategy dorothy --symbol BTCUSDT --interval 1h --profit_factor 0.05 --margin_drop_factor 0.004 --stop_loss_pct 0.10 --size_pct 0.7
 ```
 
 2) Optimizar parámetros con Optuna:
 
 ```bash
-python backtest_cli.py --db klines.db optimize --symbol BTCUSDT --interval 1h --study eval_opt --trials 50 --n_jobs 4
+python backtest_cli.py --db klines.db optimize --strategy dorothy --symbol BTCUSDT --interval 1h --study dorothy_opt --trials 50 --n_jobs 4
 ```
+
+Parámetros principales de `dorothy`:
+- `profit_factor`: porcentaje objetivo de toma de ganancia.
+- `margin_drop_factor`: margen adicional de caída para activar recompra.
+- `quote_order_qty_usdt`: nocional por operación (recomendado 8).
+- `min_order_notional`: mínimo nocional permitido (6 USDT).
+- `max_order_notional`: máximo nocional permitido (10 USDT).
+- `max_active_orders`: máximo de órdenes/targets activos simultáneos (200).
+
+Notas de modelado actual de Dorothy:
+- No utiliza stop loss; el cierre se hace por activación de límite de venta.
+- Se registra drawdown en métricas y eventos para evaluación de riesgo.
+- La optimización se centra en combinaciones de `profit_factor` y `margin_drop_factor`.
 
 3) Revisar resultados:
 
@@ -263,6 +280,13 @@ Esta sección explica exactamente los elementos que viste al validar localmente.
 
 - `reports/run_3_equity.csv`
   - Serie exportada (`seq`, `event_time`, `equity`) para análisis externo.
+
+- `reports/run_<id>_report.json`
+  - Reporte descriptivo del run con:
+    - símbolo, estrategia e intervalo,
+    - timestamps de inicio/fin de configuración,
+    - primera/última vela efectiva procesada (ms + ISO UTC),
+    - estado del run y cantidad de eventos.
 
 - `reports/study_eval_opt_trials.png`
   - Evolución del objetivo por número de trial dentro del estudio.

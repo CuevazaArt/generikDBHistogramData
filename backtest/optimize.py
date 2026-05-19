@@ -3,11 +3,12 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Type
 
 try:
-    import optuna
+    import optuna  # type: ignore[import-not-found]
 except ImportError:  # pragma: no cover - runtime guard
     optuna = None
 
 from backtest.engine import EngineConfig
+from backtest.registry import suggest_params
 from backtest.runner import execute_and_persist
 from backtest.storage import save_trial, save_trial_metrics
 from backtest.strategy_base import StrategyBase
@@ -39,16 +40,15 @@ def optimize_strategy(
 
     def objective(trial: optuna.Trial) -> float:
         started_at = _utc_now()
-        params = {
-            "fast": trial.suggest_int("fast", 5, 40),
-            "slow": trial.suggest_int("slow", 20, 120),
-        }
-        if params["fast"] >= params["slow"]:
+        params = suggest_params(trial, strategy_cls.name)
+        if params.get("_invalid"):
             raise optuna.exceptions.TrialPruned()
+        params = {k: v for k, v in params.items() if not k.startswith("_")}
 
         cfg = EngineConfig(**base_config.__dict__)
-        cfg.sma_fast = int(params["fast"])
-        cfg.sma_slow = int(params["slow"])
+        if strategy_cls.name == "sma_cross":
+            cfg.sma_fast = int(params["fast"])
+            cfg.sma_slow = int(params["slow"])
         result = execute_and_persist(
             config=cfg,
             strategy_cls=strategy_cls,

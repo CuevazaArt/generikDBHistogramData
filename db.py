@@ -171,7 +171,7 @@ def query_klines(
     conn = _connect(path)
     cur = conn.cursor()
     sql = "SELECT * FROM klines WHERE symbol=? AND interval=?"
-    params = [symbol, interval]
+    params: List[Any] = [symbol, interval]
     if start_ts is not None:
         sql += " AND open_time>=?"
         params.append(int(start_ts))
@@ -223,7 +223,7 @@ def create_bt_run(
                 _utc_now(),
             ),
         )
-        run_id = int(cur.lastrowid)
+        run_id = int(cur.lastrowid or 0)
     conn.close()
     return run_id
 
@@ -244,7 +244,7 @@ def insert_bt_events(path: str, run_id: int, events: Iterable[Dict[str, Any]]) -
         rows.append(
             (
                 int(run_id),
-                int(e.get("trial_id")) if e.get("trial_id") is not None else None,
+                int(e["trial_id"]) if e.get("trial_id") is not None else None,
                 int(e["seq"]),
                 int(e["event_time"]) if e.get("event_time") is not None else None,
                 str(e["event_type"]),
@@ -343,7 +343,7 @@ def create_bt_trial(
                 float(duration_sec) if duration_sec is not None else None,
             ),
         )
-        trial_id = int(cur.lastrowid)
+        trial_id = int(cur.lastrowid or 0)
     conn.close()
     return trial_id
 
@@ -456,6 +456,94 @@ def get_bt_trial_objectives(path: str, study_name: str, limit: int = 500) -> Lis
         SELECT trial_number, objective
         FROM bt_trials
         WHERE study_name=? AND objective IS NOT NULL
+        ORDER BY trial_number ASC
+        LIMIT ?
+        """,
+        (study_name, int(limit)),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+def get_bt_signal_events(path: str, run_id: int) -> List[Tuple]:
+    conn = _connect(path)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT seq, event_time, event_type, side, price, qty, payload_json
+        FROM bt_events
+        WHERE run_id=? AND side IN ('buy', 'sell')
+        ORDER BY seq ASC
+        """,
+        (int(run_id),),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+def get_bt_run_descriptor(path: str, run_id: int) -> Optional[Dict[str, Any]]:
+    conn = _connect(path)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT
+            r.run_id,
+            r.strategy_name,
+            r.symbol,
+            r.interval,
+            r.start_ts,
+            r.end_ts,
+            r.initial_cash,
+            r.fee_rate,
+            r.slippage_bps,
+            r.status,
+            r.created_at,
+            r.ended_at,
+            MIN(e.event_time) AS first_event_time,
+            MAX(e.event_time) AS last_event_time,
+            COUNT(e.event_id) AS event_count
+        FROM bt_runs r
+        LEFT JOIN bt_events e ON e.run_id = r.run_id
+        WHERE r.run_id = ?
+        GROUP BY
+            r.run_id, r.strategy_name, r.symbol, r.interval, r.start_ts, r.end_ts,
+            r.initial_cash, r.fee_rate, r.slippage_bps, r.status, r.created_at, r.ended_at
+        """,
+        (int(run_id),),
+    )
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {
+        "run_id": int(row[0]),
+        "strategy_name": row[1],
+        "symbol": row[2],
+        "interval": row[3],
+        "config_start_ts": int(row[4]) if row[4] is not None else None,
+        "config_end_ts": int(row[5]) if row[5] is not None else None,
+        "initial_cash": float(row[6]),
+        "fee_rate": float(row[7]),
+        "slippage_bps": float(row[8]),
+        "status": row[9],
+        "created_at": row[10],
+        "ended_at": row[11],
+        "first_event_time": int(row[12]) if row[12] is not None else None,
+        "last_event_time": int(row[13]) if row[13] is not None else None,
+        "event_count": int(row[14]) if row[14] is not None else 0,
+    }
+
+
+def get_bt_study_trials(path: str, study_name: str, limit: int = 10_000) -> List[Tuple]:
+    conn = _connect(path)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT trial_id, trial_number, state, objective, params_json, started_at, finished_at, duration_sec
+        FROM bt_trials
+        WHERE study_name=?
         ORDER BY trial_number ASC
         LIMIT ?
         """,

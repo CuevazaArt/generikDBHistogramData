@@ -110,6 +110,7 @@ def run_backtest(
             candles=candles,
             cash=broker.state.cash,
             position_qty=broker.state.position_qty,
+            avg_entry=broker.state.avg_entry,
             equity=equity,
         )
         signal = strategy.on_bar(ctx)
@@ -117,6 +118,7 @@ def run_backtest(
             fill = broker.execute_market(signal.action, price=px, size_pct=signal.size_pct)
             seq += 1
             if fill:
+                strategy.on_fill(fill=fill, signal=signal, ctx=ctx)
                 event = Event(
                     seq=seq,
                     event_time=int(candle["open_time"]),
