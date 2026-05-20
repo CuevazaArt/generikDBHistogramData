@@ -161,7 +161,7 @@ def _menu(db_path: str) -> None:
         if choice == "1":
             symbol = input("Símbolo [BTCUSDT]: ").strip() or "BTCUSDT"
             interval = input("Intervalo [1h]: ").strip() or "1h"
-            strategy = (input("Estrategia [dorothy|sma_cross] (def dorothy): ").strip() or "dorothy").lower()
+            strategy = (input("Estrategia [dorothy|elphaba|ha_trend|sma_cross] (def dorothy): ").strip() or "dorothy").lower()
             args = argparse.Namespace(
                 db=db_path,
                 strategy=strategy,
@@ -177,16 +177,19 @@ def _menu(db_path: str) -> None:
                 slow=int((input("SMA slow [30]: ").strip() or "30")),
                 profit_factor=float((input("Dorothy profit_factor [0.05]: ").strip() or "0.05")),
                 margin_drop_factor=float((input("Dorothy margin_drop_factor [0.004]: ").strip() or "0.004")),
+                margin_rise_factor=float((input("Elphaba margin_rise_factor [0.03]: ").strip() or "0.03")),
                 quote_order_qty_usdt=float((input("Dorothy quote_order_qty_usdt [8]: ").strip() or "8")),
                 min_order_notional=float((input("Dorothy min_order_notional [6]: ").strip() or "6")),
                 max_order_notional=float((input("Dorothy max_order_notional [10]: ").strip() or "10")),
                 max_active_orders=int((input("Dorothy max_active_orders [200]: ").strip() or "200")),
+                max_rungs=int((input("max_rungs [5]: ").strip() or "5")),
+                trend_mode=(input("HA trend_mode [both|long|short] (def both): ").strip() or "both").lower(),
             )
             _run_once(args)
         elif choice == "2":
             symbol = input("Símbolo [BTCUSDT]: ").strip() or "BTCUSDT"
             interval = input("Intervalo [1h]: ").strip() or "1h"
-            strategy = (input("Estrategia [dorothy|sma_cross] (def dorothy): ").strip() or "dorothy").lower()
+            strategy = (input("Estrategia [dorothy|elphaba|ha_trend|sma_cross] (def dorothy): ").strip() or "dorothy").lower()
             study = input("Study name [sma_opt]: ").strip() or "sma_opt"
             trials = int((input("Trials [30]: ").strip() or "30"))
             jobs = int((input("n_jobs CPU [2]: ").strip() or "2"))
@@ -209,6 +212,13 @@ def _menu(db_path: str) -> None:
                 min_order_notional=6.0,
                 max_order_notional=10.0,
                 max_active_orders=200,
+                max_rungs=5,
+                margin_drop_factor=0.004,
+                margin_rise_factor=0.03,
+                profit_factor=0.05,
+                fast=10,
+                slow=30,
+                trend_mode="both",
             )
             _optimize(args)
         elif choice == "3":
@@ -228,7 +238,7 @@ def main() -> None:
     sub = parser.add_subparsers(dest="cmd")
 
     p_run = sub.add_parser("run")
-    p_run.add_argument("--strategy", default="dorothy", choices=("dorothy", "sma_cross"))
+    p_run.add_argument("--strategy", default="dorothy", choices=("dorothy", "elphaba", "ha_trend", "sma_cross", "dorothy_legacy", "dorothy_hub", "elphaba_hub"))
     p_run.add_argument("--symbol", required=True)
     p_run.add_argument("--interval", required=True)
     p_run.add_argument("--start_ts")
@@ -245,9 +255,12 @@ def main() -> None:
     p_run.add_argument("--min_order_notional", type=float, default=6.0)
     p_run.add_argument("--max_order_notional", type=float, default=10.0)
     p_run.add_argument("--max_active_orders", type=int, default=200)
+    p_run.add_argument("--max_rungs", type=int, default=5)
+    p_run.add_argument("--margin_rise_factor", type=float, default=0.03)
+    p_run.add_argument("--trend_mode", default="both", choices=("both", "long", "short"))
 
     p_opt = sub.add_parser("optimize")
-    p_opt.add_argument("--strategy", default="dorothy", choices=("dorothy", "sma_cross"))
+    p_opt.add_argument("--strategy", default="dorothy", choices=("dorothy", "elphaba", "ha_trend", "sma_cross", "dorothy_legacy", "dorothy_hub", "elphaba_hub"))
     p_opt.add_argument("--symbol", required=True)
     p_opt.add_argument("--interval", required=True)
     p_opt.add_argument("--study", default="sma_opt")
@@ -264,6 +277,13 @@ def main() -> None:
     p_opt.add_argument("--min_order_notional", type=float, default=6.0)
     p_opt.add_argument("--max_order_notional", type=float, default=10.0)
     p_opt.add_argument("--max_active_orders", type=int, default=200)
+    p_opt.add_argument("--max_rungs", type=int, default=5)
+    p_opt.add_argument("--profit_factor", type=float, default=0.05)
+    p_opt.add_argument("--margin_drop_factor", type=float, default=0.004)
+    p_opt.add_argument("--margin_rise_factor", type=float, default=0.03)
+    p_opt.add_argument("--fast", type=int, default=10)
+    p_opt.add_argument("--slow", type=int, default=30)
+    p_opt.add_argument("--trend_mode", default="both", choices=("both", "long", "short"))
 
     p_show = sub.add_parser("show")
     p_show.add_argument("--run_id", type=int)
