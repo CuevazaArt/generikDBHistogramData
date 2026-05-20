@@ -5,6 +5,8 @@ Proyecto para descargar y almacenar datos de histogramas (klines) de Binance en 
 ## Documentación
 
 - `README_BINANCE.md`: instrucciones detalladas de uso, instalación y ejemplos.
+- `USER_MANUAL.md`: manual de usuario del proyecto.
+- `docs/TESTER_CAPABILITIES.md`: reporte de capacidades actuales del backtester (engine, bots, Optuna, UI).
 
 ## Contenido
 

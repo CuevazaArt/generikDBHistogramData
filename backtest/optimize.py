@@ -1,4 +1,7 @@
 """Optuna-based optimization for backtest strategies."""
+from __future__ import annotations
+
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Type
 
@@ -15,8 +18,71 @@ from backtest.strategy_base import StrategyBase
 from db import init_db
 
 
+AVAILABLE_OBJECTIVE_METRICS = (
+    "total_return",
+    "final_equity",
+    "sharpe",
+    "sortino",
+    "calmar",
+    "ulcer_index",
+    "profit_factor",
+    "win_rate",
+    "max_drawdown",
+    "num_trades",
+)
+
+AVAILABLE_SAMPLERS = ("tpe", "random")
+
+
+@dataclass
+class OptimizationConfig:
+    """Configuration knobs for an Optuna optimization run.
+
+    Negative directions on metrics like `max_drawdown` should be combined with
+    `direction='minimize'` to actually search for the smallest drawdown.
+    """
+
+    objective_metric: str = "total_return"
+    direction: str = "maximize"
+    sampler: str = "tpe"
+    seed: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        metric = (self.objective_metric or "total_return").strip().lower()
+        if metric not in AVAILABLE_OBJECTIVE_METRICS:
+            raise ValueError(
+                f"Unsupported objective_metric '{metric}'. Available: {', '.join(AVAILABLE_OBJECTIVE_METRICS)}"
+            )
+        direction = (self.direction or "maximize").strip().lower()
+        if direction not in ("maximize", "minimize"):
+            raise ValueError(f"Unsupported direction '{direction}'. Use 'maximize' or 'minimize'.")
+        sampler = (self.sampler or "tpe").strip().lower()
+        if sampler not in AVAILABLE_SAMPLERS:
+            raise ValueError(f"Unsupported sampler '{sampler}'. Available: {', '.join(AVAILABLE_SAMPLERS)}")
+        self.objective_metric = metric
+        self.direction = direction
+        self.sampler = sampler
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _build_sampler(sampler_name: str, seed: Optional[int]):
+    if optuna is None:  # pragma: no cover - runtime guard
+        return None
+    if sampler_name == "random":
+        return optuna.samplers.RandomSampler(seed=seed)
+    return optuna.samplers.TPESampler(seed=seed)
+
+
+def _coerce_metric_value(value: Any) -> float:
+    if value is None:
+        return 0.0
+    try:
+        return float(value)
+    except Exception:
+        return 0.0
 
 
 def optimize_strategy(
@@ -28,18 +94,22 @@ def optimize_strategy(
     n_jobs: int = 1,
     timeout: Optional[int] = None,
     search_overrides: Optional[Dict[str, Any]] = None,
+    optimization: Optional[OptimizationConfig] = None,
 ) -> Any:
     if optuna is None:
         raise RuntimeError("Optuna is not installed. Run: pip install -r requirements.txt")
     init_db(db_path)
+    opt = optimization or OptimizationConfig()
+    sampler = _build_sampler(opt.sampler, opt.seed)
     study = optuna.create_study(
         study_name=study_name,
         storage=f"sqlite:///{db_path}",
         load_if_exists=True,
-        direction="maximize",
+        direction=opt.direction,
+        sampler=sampler,
     )
 
-    def objective(trial: optuna.Trial) -> float:
+    def objective(trial: "optuna.Trial") -> float:
         started_at = _utc_now()
         params = suggest_params(trial, strategy_cls.name, search_overrides=search_overrides)
         if params.get("_invalid"):
@@ -55,7 +125,7 @@ def optimize_strategy(
             strategy_cls=strategy_cls,
             strategy_params=params,
         )
-        objective_value = float(result.metrics["total_return"])
+        objective_value = _coerce_metric_value(result.metrics.get(opt.objective_metric))
         finished_at = _utc_now()
         trial_id = save_trial(
             db_path=db_path,
@@ -73,4 +143,3 @@ def optimize_strategy(
 
     study.optimize(objective, n_trials=int(trials), n_jobs=int(n_jobs), timeout=timeout)
     return study
-
