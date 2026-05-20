@@ -385,8 +385,28 @@ def _build_optuna_search_overrides(strategy: str) -> dict[str, Any]:
         overrides["fast_max"] = _ask_int("fast max", 40, 1)
         overrides["slow_min"] = _ask_int("slow min", 20, 2)
         overrides["slow_max"] = _ask_int("slow max", 120, 2)
-    elif strategy in ("masha", "thusnelda", "louise", "anti_louise", "louise_lucky", "anti_louise_lucky"):
-        # Placeholders keep default tiny search-space.
+    elif strategy == "masha":
+        overrides["fast_min"] = _ask_int("fast min", 5, 1)
+        overrides["fast_max"] = _ask_int("fast max", 30, 1)
+        overrides["slow_min"] = _ask_int("slow min", 20, 2)
+        overrides["slow_max"] = _ask_int("slow max", 120, 2)
+        overrides["target_profit_pct_min"] = _ask_float("target_profit_pct min", 0.2, 0.0)
+        overrides["target_profit_pct_max"] = _ask_float("target_profit_pct max", 5.0, 0.0)
+        overrides["stop_loss_pct_min"] = _ask_float("stop_loss_pct min", 1.0, 0.0)
+        overrides["stop_loss_pct_max"] = _ask_float("stop_loss_pct max", 10.0, 0.0)
+        overrides["pullback_factor_min"] = _ask_float("pullback_factor min", 0.001, 0.0)
+        overrides["pullback_factor_max"] = _ask_float("pullback_factor max", 0.03, 0.0)
+    elif strategy in ("louise", "louise_lucky"):
+        overrides["target_profit_pct_min"] = _ask_float("target_profit_pct min", 0.2, 0.0)
+        overrides["target_profit_pct_max"] = _ask_float("target_profit_pct max", 5.0, 0.0)
+        overrides["margin_drop_factor_min"] = _ask_float("margin_drop_factor min", 0.001, 0.0)
+        overrides["margin_drop_factor_max"] = _ask_float("margin_drop_factor max", 0.03, 0.0)
+    elif strategy in ("anti_louise", "anti_louise_lucky"):
+        overrides["target_profit_pct_min"] = _ask_float("target_profit_pct min", 0.2, 0.0)
+        overrides["target_profit_pct_max"] = _ask_float("target_profit_pct max", 5.0, 0.0)
+        overrides["margin_rise_factor_min"] = _ask_float("margin_rise_factor min", 0.001, 0.0)
+        overrides["margin_rise_factor_max"] = _ask_float("margin_rise_factor max", 0.03, 0.0)
+    elif strategy == "thusnelda":
         pass
     else:
         print("Esta estrategia no requiere rango custom por ahora.")
@@ -407,6 +427,12 @@ def _extract_optuna_overrides_from_args(args: argparse.Namespace) -> dict[str, A
         "fast_max",
         "slow_min",
         "slow_max",
+        "target_profit_pct_min",
+        "target_profit_pct_max",
+        "stop_loss_pct_min",
+        "stop_loss_pct_max",
+        "pullback_factor_min",
+        "pullback_factor_max",
     )
     out: dict[str, Any] = {}
     for key in keys:
@@ -620,7 +646,26 @@ def _menu(db_path: str) -> None:
                     tm = "both"
                 base_payload["trend_mode"] = tm
                 base_payload["quote_order_qty_usdt"] = _ask_float("quote_order_qty_usdt", 8.0, min_value=0.1)
-            elif strategy in ("masha", "thusnelda", "louise", "anti_louise", "louise_lucky", "anti_louise_lucky"):
+            elif strategy == "masha":
+                base_payload["fast"] = _ask_int("fast", 9, min_value=2)
+                base_payload["slow"] = _ask_int("slow", 34, min_value=3)
+                base_payload["quote_order_qty_usdt"] = _ask_float("quote_order_qty_usdt", 8.0, min_value=0.1)
+                base_payload["take_profit_pct"] = _ask_float("take_profit_pct", 1.5, min_value=0.0)
+                base_payload["stop_loss_pct"] = _ask_float("stop_loss_pct", 4.0, min_value=0.0)
+                base_payload["pullback_factor"] = _ask_float("pullback_factor", 0.006, min_value=0.0)
+            elif strategy in ("louise", "louise_lucky"):
+                base_payload["quote_order_qty_usdt"] = _ask_float("quote_order_qty_usdt", 8.0, min_value=0.1)
+                base_payload["target_profit_pct"] = _ask_float("target_profit_pct", 1.5, min_value=0.0)
+                base_payload["margin_drop_factor"] = _ask_float("margin_drop_factor", 0.004, min_value=0.0)
+                if strategy.endswith("_lucky"):
+                    base_payload["lucky_window"] = _ask_int("lucky_window", 24, min_value=3)
+            elif strategy in ("anti_louise", "anti_louise_lucky"):
+                base_payload["quote_order_qty_usdt"] = _ask_float("quote_order_qty_usdt", 8.0, min_value=0.1)
+                base_payload["target_profit_pct"] = _ask_float("target_profit_pct", 1.5, min_value=0.0)
+                base_payload["margin_rise_factor"] = _ask_float("margin_rise_factor", 0.004, min_value=0.0)
+                if strategy.endswith("_lucky"):
+                    base_payload["lucky_window"] = _ask_int("lucky_window", 24, min_value=3)
+            elif strategy == "thusnelda":
                 base_payload["placeholder_level"] = _ask_int("placeholder_level", 1, min_value=1)
             else:
                 print(f"Estrategia desconocida: {strategy}")
@@ -684,6 +729,10 @@ def _menu(db_path: str) -> None:
                 slow=30,
                 trend_mode="both",
                 placeholder_level=1,
+                target_profit_pct=1.5,
+                stop_loss_pct=4.0,
+                pullback_factor=0.006,
+                lucky_window=24,
                 search_overrides=search_overrides,
             )
             _optimize(args)
@@ -760,6 +809,11 @@ def main() -> None:
     p_run.add_argument("--margin_rise_factor", type=float, default=0.03)
     p_run.add_argument("--trend_mode", default="both", choices=("both", "long", "short"))
     p_run.add_argument("--placeholder_level", type=int, default=1)
+    p_run.add_argument("--target_profit_pct", type=float, default=1.5)
+    p_run.add_argument("--take_profit_pct", type=float, default=1.5)
+    p_run.add_argument("--stop_loss_pct", type=float, default=4.0)
+    p_run.add_argument("--pullback_factor", type=float, default=0.006)
+    p_run.add_argument("--lucky_window", type=int, default=24)
 
     p_opt = sub.add_parser("optimize")
     p_opt.add_argument(
@@ -805,6 +859,11 @@ def main() -> None:
     p_opt.add_argument("--slow", type=int, default=30)
     p_opt.add_argument("--trend_mode", default="both", choices=("both", "long", "short"))
     p_opt.add_argument("--placeholder_level", type=int, default=1)
+    p_opt.add_argument("--target_profit_pct", type=float, default=1.5)
+    p_opt.add_argument("--take_profit_pct", type=float, default=1.5)
+    p_opt.add_argument("--stop_loss_pct", type=float, default=4.0)
+    p_opt.add_argument("--pullback_factor", type=float, default=0.006)
+    p_opt.add_argument("--lucky_window", type=int, default=24)
     p_opt.add_argument("--profit_factor_min", type=float)
     p_opt.add_argument("--profit_factor_max", type=float)
     p_opt.add_argument("--margin_drop_factor_min", type=float)
@@ -817,6 +876,12 @@ def main() -> None:
     p_opt.add_argument("--fast_max", type=int)
     p_opt.add_argument("--slow_min", type=int)
     p_opt.add_argument("--slow_max", type=int)
+    p_opt.add_argument("--target_profit_pct_min", type=float)
+    p_opt.add_argument("--target_profit_pct_max", type=float)
+    p_opt.add_argument("--stop_loss_pct_min", type=float)
+    p_opt.add_argument("--stop_loss_pct_max", type=float)
+    p_opt.add_argument("--pullback_factor_min", type=float)
+    p_opt.add_argument("--pullback_factor_max", type=float)
 
     p_show = sub.add_parser("show")
     p_show.add_argument("--run_id", type=int)

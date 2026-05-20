@@ -148,11 +148,8 @@ class DorothyHubStrategy(StrategyBase):
     def on_bar(self, ctx: StrategyContext) -> Signal:
         price = float(ctx.candle.get("price_source", ctx.candle["close"]))
         trend = str(ctx.candle.get("pec_trend", "UNKNOWN"))
-        entry_gate = str(ctx.candle.get("pec_entry_gate", "UNKNOWN"))
         if trend != "BULLISH":
             return Signal(action="hold", reason="wait_trend_bullish", metadata={"trend": trend})
-        if entry_gate != "BLOCKED":
-            return Signal(action="hold", reason="wait_entry_blocked", metadata={"entry_gate": entry_gate})
         if price <= 0:
             return Signal(action="hold", reason="invalid_price")
 
@@ -231,11 +228,8 @@ class ElphabaHubStrategy(StrategyBase):
     def on_bar(self, ctx: StrategyContext) -> Signal:
         price = float(ctx.candle.get("price_source", ctx.candle["close"]))
         trend = str(ctx.candle.get("pec_trend", "UNKNOWN"))
-        entry_gate = str(ctx.candle.get("pec_entry_gate", "UNKNOWN"))
         if trend != "BEARISH":
             return Signal(action="hold", reason="wait_trend_bearish", metadata={"trend": trend})
-        if entry_gate != "BLOCKED":
-            return Signal(action="hold", reason="wait_entry_blocked", metadata={"entry_gate": entry_gate})
         if price <= 0:
             return Signal(action="hold", reason="invalid_price")
 
@@ -346,22 +340,89 @@ class HeikinAshiTrendStrategy(StrategyBase):
         return Signal(action="hold")
 
 
-class MashaPlaceholderStrategy(StrategyBase):
-    """Temporary adapter for future Masha strategy integration."""
+class MashaStrategy(StrategyBase):
+    """Single-asset trend/pullback adapter inspired by Masha behavior."""
 
     name = "masha"
 
-    def __init__(self, placeholder_level: int = 1, **params):
-        super().__init__(placeholder_level=placeholder_level, **params)
-        self.placeholder_level = max(1, int(placeholder_level))
+    def __init__(
+        self,
+        fast: int = 9,
+        slow: int = 34,
+        quote_order_qty_usdt: float = 8.0,
+        take_profit_pct: float = 1.5,
+        stop_loss_pct: float = 4.0,
+        pullback_factor: float = 0.006,
+        **params,
+    ):
+        super().__init__(
+            fast=fast,
+            slow=slow,
+            quote_order_qty_usdt=quote_order_qty_usdt,
+            take_profit_pct=take_profit_pct,
+            stop_loss_pct=stop_loss_pct,
+            pullback_factor=pullback_factor,
+            **params,
+        )
+        self.fast = max(2, int(fast))
+        self.slow = max(self.fast + 1, int(slow))
+        self.quote_order_qty_usdt = max(1.0, float(quote_order_qty_usdt))
+        self.take_profit_pct = max(0.0, float(take_profit_pct))
+        self.stop_loss_pct = max(0.0, float(stop_loss_pct))
+        self.pullback_factor = max(0.0, float(pullback_factor))
+
+    def _sma(self, candles: list[dict], idx: int, period: int) -> float | None:
+        if idx + 1 < period:
+            return None
+        start = idx + 1 - period
+        closes = [float(candles[i].get("price_source", candles[i]["close"])) for i in range(start, idx + 1)]
+        if not closes:
+            return None
+        return sum(closes) / float(len(closes))
 
     def on_bar(self, ctx: StrategyContext) -> Signal:
-        _ = ctx
-        return Signal(
-            action="hold",
-            reason="placeholder_masha_pending_adapter",
-            metadata={"placeholder_level": self.placeholder_level},
-        )
+        price = float(ctx.candle.get("price_source", ctx.candle["close"]))
+        if price <= 0:
+            return Signal(action="hold", reason="invalid_price")
+        if ctx.position_qty > 0 and ctx.avg_entry > 0:
+            tp_trigger = float(ctx.avg_entry) * (1.0 + self.take_profit_pct / 100.0)
+            sl_trigger = float(ctx.avg_entry) * (1.0 - self.stop_loss_pct / 100.0)
+            if self.take_profit_pct > 0 and price >= tp_trigger:
+                return Signal(action="sell", size_pct=1.0, reason="masha_take_profit", metadata={"tp_trigger": tp_trigger})
+            if self.stop_loss_pct > 0 and price <= sl_trigger:
+                return Signal(action="sell", size_pct=1.0, reason="masha_stop_loss", metadata={"sl_trigger": sl_trigger})
+
+        if ctx.index < self.slow:
+            return Signal(action="hold", reason="warmup")
+
+        prev_idx = max(0, ctx.index - 1)
+        fast_now = self._sma(ctx.candles, ctx.index, self.fast)
+        slow_now = self._sma(ctx.candles, ctx.index, self.slow)
+        fast_prev = self._sma(ctx.candles, prev_idx, self.fast)
+        slow_prev = self._sma(ctx.candles, prev_idx, self.slow)
+        if None in (fast_now, slow_now, fast_prev, slow_prev):
+            return Signal(action="hold", reason="indicator_none")
+        if ctx.cash < self.quote_order_qty_usdt and ctx.position_qty <= 0:
+            return Signal(action="hold", reason="insufficient_cash")
+
+        cross_up = fast_prev <= slow_prev and fast_now > slow_now
+        cross_down = fast_prev >= slow_prev and fast_now < slow_now
+        if cross_down and ctx.position_qty > 0:
+            return Signal(action="sell", size_pct=1.0, reason="masha_trend_break")
+        if cross_up and ctx.cash >= self.quote_order_qty_usdt:
+            size_pct = max(0.01, min(1.0, self.quote_order_qty_usdt / max(ctx.cash, 1e-9)))
+            return Signal(action="buy", size_pct=size_pct, reason="masha_trend_cross_up")
+        if fast_now > slow_now:
+            pullback_price = fast_now * (1.0 - self.pullback_factor)
+            if price <= pullback_price and ctx.cash >= self.quote_order_qty_usdt:
+                size_pct = max(0.01, min(1.0, self.quote_order_qty_usdt / max(ctx.cash, 1e-9)))
+                return Signal(
+                    action="buy",
+                    size_pct=size_pct,
+                    reason="masha_pullback_entry",
+                    metadata={"pullback_trigger": pullback_price},
+                )
+        return Signal(action="hold")
 
 
 class ThusneldaPlaceholderStrategy(StrategyBase):
@@ -380,3 +441,199 @@ class ThusneldaPlaceholderStrategy(StrategyBase):
             reason="placeholder_thusnelda_pending_adapter",
             metadata={"placeholder_level": self.placeholder_level},
         )
+
+
+class LouiseStrategy(StrategyBase):
+    """DCA downside strategy with average-price take profit."""
+
+    name = "louise"
+
+    def __init__(
+        self,
+        target_profit_pct: float = 1.5,
+        margin_drop_factor: float = 0.004,
+        quote_order_qty_usdt: float = 8.0,
+        **params,
+    ):
+        super().__init__(
+            target_profit_pct=target_profit_pct,
+            margin_drop_factor=margin_drop_factor,
+            quote_order_qty_usdt=quote_order_qty_usdt,
+            **params,
+        )
+        self.target_profit_pct = max(0.0, float(target_profit_pct))
+        self.margin_drop_factor = max(0.0, float(margin_drop_factor))
+        self.quote_order_qty_usdt = max(1.0, float(quote_order_qty_usdt))
+        self.last_purchase_price = 0.0
+
+    def on_start(self, candles):
+        annotate_pecunator_gates(candles, price_key="price_source")
+
+    def on_bar(self, ctx: StrategyContext) -> Signal:
+        price = float(ctx.candle.get("price_source", ctx.candle["close"]))
+        if price <= 0:
+            return Signal(action="hold", reason="invalid_price")
+        if ctx.position_qty > 0 and ctx.avg_entry > 0:
+            tp_price = float(ctx.avg_entry) * (1.0 + self.target_profit_pct / 100.0)
+            if price >= tp_price:
+                return Signal(action="sell", size_pct=1.0, reason="louise_take_profit", metadata={"tp_price": tp_price})
+        if ctx.cash < self.quote_order_qty_usdt:
+            return Signal(action="hold", reason="insufficient_cash")
+        size_pct = max(0.01, min(1.0, self.quote_order_qty_usdt / max(ctx.cash, 1e-9)))
+        if ctx.position_qty <= 0 or self.last_purchase_price <= 0:
+            return Signal(action="buy", size_pct=size_pct, reason="louise_initial_buy")
+        drop_trigger = self.last_purchase_price * (1.0 - self.margin_drop_factor)
+        if price < drop_trigger:
+            return Signal(
+                action="buy",
+                size_pct=size_pct,
+                reason="louise_dca_drop",
+                metadata={"drop_trigger": drop_trigger},
+            )
+        return Signal(action="hold")
+
+    def on_fill(self, fill, signal: Signal, ctx: StrategyContext) -> None:
+        _ = signal, ctx
+        if fill.get("side") == "buy":
+            fill_price = float(fill.get("price", 0.0) or 0.0)
+            if fill_price > 0:
+                self.last_purchase_price = fill_price
+
+
+class LouiseLuckyStrategy(LouiseStrategy):
+    """Louise variant with local-low lucky entries."""
+
+    name = "louise_lucky"
+
+    def __init__(self, lucky_window: int = 24, **params):
+        super().__init__(**params)
+        self.lucky_window = max(3, int(lucky_window))
+
+    def on_bar(self, ctx: StrategyContext) -> Signal:
+        base = super().on_bar(ctx)
+        if base.action != "hold":
+            return base
+        if ctx.cash < self.quote_order_qty_usdt:
+            return Signal(action="hold", reason="insufficient_cash")
+        price = float(ctx.candle.get("price_source", ctx.candle["close"]))
+        lucky_floor = None
+        if ctx.index > 0:
+            prev = ctx.candles[ctx.index - 1]
+            if "ha_low" in prev:
+                lucky_floor = float(prev["ha_low"])
+        if lucky_floor is None:
+            start = max(0, ctx.index - self.lucky_window + 1)
+            lows = [float(ctx.candles[i].get("price_source", ctx.candles[i]["close"])) for i in range(start, ctx.index + 1)]
+            lucky_floor = min(lows) if lows else price
+        if price <= lucky_floor:
+            size_pct = max(0.01, min(1.0, self.quote_order_qty_usdt / max(ctx.cash, 1e-9)))
+            return Signal(
+                action="buy",
+                size_pct=size_pct,
+                reason="louise_lucky_strike_low",
+                metadata={"lucky_floor": lucky_floor, "lucky_window": self.lucky_window},
+            )
+        return Signal(action="hold")
+
+    def on_fill(self, fill, signal: Signal, ctx: StrategyContext) -> None:
+        if signal.reason == "louise_lucky_strike_low":
+            return
+        super().on_fill(fill, signal, ctx)
+
+
+class AntiLouiseStrategy(StrategyBase):
+    """Inverse DCA (spot approximation of short ladder logic)."""
+
+    name = "anti_louise"
+
+    def __init__(
+        self,
+        target_profit_pct: float = 1.5,
+        margin_rise_factor: float = 0.004,
+        quote_order_qty_usdt: float = 8.0,
+        **params,
+    ):
+        super().__init__(
+            target_profit_pct=target_profit_pct,
+            margin_rise_factor=margin_rise_factor,
+            quote_order_qty_usdt=quote_order_qty_usdt,
+            **params,
+        )
+        self.target_profit_pct = max(0.0, float(target_profit_pct))
+        self.margin_rise_factor = max(0.0, float(margin_rise_factor))
+        self.quote_order_qty_usdt = max(1.0, float(quote_order_qty_usdt))
+        self.last_short_anchor = 0.0
+
+    def on_start(self, candles):
+        annotate_pecunator_gates(candles, price_key="price_source")
+
+    def on_bar(self, ctx: StrategyContext) -> Signal:
+        price = float(ctx.candle.get("price_source", ctx.candle["close"]))
+        if price <= 0:
+            return Signal(action="hold", reason="invalid_price")
+        if ctx.position_qty > 0 and ctx.avg_entry > 0:
+            cover_trigger = float(ctx.avg_entry) * (1.0 - self.target_profit_pct / 100.0)
+            if price <= cover_trigger:
+                return Signal(action="sell", size_pct=1.0, reason="anti_louise_cover_profit", metadata={"cover_trigger": cover_trigger})
+        if ctx.cash < self.quote_order_qty_usdt:
+            return Signal(action="hold", reason="insufficient_cash")
+        size_pct = max(0.01, min(1.0, self.quote_order_qty_usdt / max(ctx.cash, 1e-9)))
+        if ctx.position_qty <= 0 or self.last_short_anchor <= 0:
+            return Signal(action="buy", size_pct=size_pct, reason="anti_louise_initial_inverse_entry")
+        rise_trigger = self.last_short_anchor * (1.0 + self.margin_rise_factor)
+        if price > rise_trigger:
+            return Signal(
+                action="buy",
+                size_pct=size_pct,
+                reason="anti_louise_inverse_dca_rise",
+                metadata={"rise_trigger": rise_trigger},
+            )
+        return Signal(action="hold")
+
+    def on_fill(self, fill, signal: Signal, ctx: StrategyContext) -> None:
+        _ = signal, ctx
+        if fill.get("side") == "buy":
+            fill_price = float(fill.get("price", 0.0) or 0.0)
+            if fill_price > 0:
+                self.last_short_anchor = fill_price
+
+
+class AntiLouiseLuckyStrategy(AntiLouiseStrategy):
+    """Anti-Louise variant with local-high lucky entries."""
+
+    name = "anti_louise_lucky"
+
+    def __init__(self, lucky_window: int = 24, **params):
+        super().__init__(**params)
+        self.lucky_window = max(3, int(lucky_window))
+
+    def on_bar(self, ctx: StrategyContext) -> Signal:
+        base = super().on_bar(ctx)
+        if base.action != "hold":
+            return base
+        if ctx.cash < self.quote_order_qty_usdt:
+            return Signal(action="hold", reason="insufficient_cash")
+        price = float(ctx.candle.get("price_source", ctx.candle["close"]))
+        lucky_ceiling = None
+        if ctx.index > 0:
+            prev = ctx.candles[ctx.index - 1]
+            if "ha_high" in prev:
+                lucky_ceiling = float(prev["ha_high"])
+        if lucky_ceiling is None:
+            start = max(0, ctx.index - self.lucky_window + 1)
+            highs = [float(ctx.candles[i].get("price_source", ctx.candles[i]["close"])) for i in range(start, ctx.index + 1)]
+            lucky_ceiling = max(highs) if highs else price
+        if price >= lucky_ceiling:
+            size_pct = max(0.01, min(1.0, self.quote_order_qty_usdt / max(ctx.cash, 1e-9)))
+            return Signal(
+                action="buy",
+                size_pct=size_pct,
+                reason="anti_louise_lucky_strike_high",
+                metadata={"lucky_ceiling": lucky_ceiling, "lucky_window": self.lucky_window},
+            )
+        return Signal(action="hold")
+
+    def on_fill(self, fill, signal: Signal, ctx: StrategyContext) -> None:
+        if signal.reason == "anti_louise_lucky_strike_high":
+            return
+        super().on_fill(fill, signal, ctx)

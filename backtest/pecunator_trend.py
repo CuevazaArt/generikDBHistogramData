@@ -68,6 +68,10 @@ def annotate_pecunator_gates(candles: List[Dict[str, Any]], price_key: str = "pr
     for i, c in enumerate(candles):
         price = float(c.get(price_key, c.get("close", 0.0)))
         candle_open = float(c.get("open", 0.0))
+        c["ha_open"] = float(ha[i]["ha_open"])
+        c["ha_close"] = float(ha[i]["ha_close"])
+        c["ha_high"] = float(ha[i]["ha_high"])
+        c["ha_low"] = float(ha[i]["ha_low"])
         c["pec_trend"] = compute_trend(ha, i)
         c["pec_entry_gate"] = compute_entry_gate(price, candle_open)
 

@@ -3,11 +3,15 @@ from typing import Any, Dict, Optional, Type
 
 from backtest.strategy_base import StrategyBase
 from backtest.strategies import (
+    AntiLouiseLuckyStrategy,
+    AntiLouiseStrategy,
     DorothyBacktestStrategy,
     DorothyHubStrategy,
     ElphabaHubStrategy,
     HeikinAshiTrendStrategy,
-    MashaPlaceholderStrategy,
+    LouiseLuckyStrategy,
+    LouiseStrategy,
+    MashaStrategy,
     SmaCrossStrategy,
     ThusneldaPlaceholderStrategy,
 )
@@ -19,13 +23,12 @@ STRATEGY_REGISTRY: Dict[str, Type[StrategyBase]] = {
     DorothyHubStrategy.name: DorothyHubStrategy,
     ElphabaHubStrategy.name: ElphabaHubStrategy,
     HeikinAshiTrendStrategy.name: HeikinAshiTrendStrategy,
-    MashaPlaceholderStrategy.name: MashaPlaceholderStrategy,
+    MashaStrategy.name: MashaStrategy,
     ThusneldaPlaceholderStrategy.name: ThusneldaPlaceholderStrategy,
-    # Placeholders for newly imported Louise family.
-    "louise": MashaPlaceholderStrategy,
-    "anti_louise": ThusneldaPlaceholderStrategy,
-    "louise_lucky": MashaPlaceholderStrategy,
-    "anti_louise_lucky": ThusneldaPlaceholderStrategy,
+    LouiseStrategy.name: LouiseStrategy,
+    AntiLouiseStrategy.name: AntiLouiseStrategy,
+    LouiseLuckyStrategy.name: LouiseLuckyStrategy,
+    AntiLouiseLuckyStrategy.name: AntiLouiseLuckyStrategy,
     # Backward-compatible aliases from previous naming.
     "dorothy_hub": DorothyHubStrategy,
     "elphaba_hub": ElphabaHubStrategy,
@@ -72,10 +75,35 @@ def params_from_cli(args: Any, strategy_name: str) -> Dict[str, Any]:
             "trend_mode": str(args.trend_mode),
             "quote_order_qty_usdt": float(args.quote_order_qty_usdt),
         }
-    if key in ("masha", "thusnelda", "louise", "anti_louise", "louise_lucky", "anti_louise_lucky"):
+    if key == "masha":
         return {
-            "placeholder_level": int(getattr(args, "placeholder_level", 1)),
+            "fast": int(getattr(args, "fast", 9)),
+            "slow": int(getattr(args, "slow", 34)),
+            "quote_order_qty_usdt": float(getattr(args, "quote_order_qty_usdt", 8.0)),
+            "take_profit_pct": float(getattr(args, "take_profit_pct", 1.5)),
+            "stop_loss_pct": float(getattr(args, "stop_loss_pct", 4.0)),
+            "pullback_factor": float(getattr(args, "pullback_factor", 0.006)),
         }
+    if key in ("louise", "louise_lucky"):
+        params = {
+            "target_profit_pct": float(getattr(args, "target_profit_pct", 1.5)),
+            "margin_drop_factor": float(getattr(args, "margin_drop_factor", 0.004)),
+            "quote_order_qty_usdt": float(getattr(args, "quote_order_qty_usdt", 8.0)),
+        }
+        if key.endswith("_lucky"):
+            params["lucky_window"] = int(getattr(args, "lucky_window", 24))
+        return params
+    if key in ("anti_louise", "anti_louise_lucky"):
+        params = {
+            "target_profit_pct": float(getattr(args, "target_profit_pct", 1.5)),
+            "margin_rise_factor": float(getattr(args, "margin_rise_factor", 0.004)),
+            "quote_order_qty_usdt": float(getattr(args, "quote_order_qty_usdt", 8.0)),
+        }
+        if key.endswith("_lucky"):
+            params["lucky_window"] = int(getattr(args, "lucky_window", 24))
+        return params
+    if key == "thusnelda":
+        return {"placeholder_level": int(getattr(args, "placeholder_level", 1))}
     return {
         "fast": int(args.fast),
         "slow": int(args.slow),
@@ -141,8 +169,46 @@ def suggest_params(trial: Any, strategy_name: str, search_overrides: Optional[Di
             "trend_mode": trial.suggest_categorical("trend_mode", ["both", "long", "short"]),
             "quote_order_qty_usdt": 8.0,
         }
-    if key in ("masha", "thusnelda", "louise", "anti_louise", "louise_lucky", "anti_louise_lucky"):
-        # Placeholder: keep a no-op parameter to allow Optuna flow/tests.
+    if key == "masha":
+        fast_min, fast_max = _get_int_range(overrides, "fast_min", "fast_max", 5, 30)
+        slow_min, slow_max = _get_int_range(overrides, "slow_min", "slow_max", 20, 120)
+        tp_min, tp_max = _get_float_range(overrides, "target_profit_pct_min", "target_profit_pct_max", 0.2, 5.0)
+        sl_min, sl_max = _get_float_range(overrides, "stop_loss_pct_min", "stop_loss_pct_max", 1.0, 10.0)
+        pb_min, pb_max = _get_float_range(overrides, "pullback_factor_min", "pullback_factor_max", 0.001, 0.03)
+        params = {
+            "fast": int(trial.suggest_int("fast", fast_min, fast_max)),
+            "slow": int(trial.suggest_int("slow", slow_min, slow_max)),
+            "quote_order_qty_usdt": 8.0,
+            "take_profit_pct": float(trial.suggest_float("take_profit_pct", tp_min, tp_max)),
+            "stop_loss_pct": float(trial.suggest_float("stop_loss_pct", sl_min, sl_max)),
+            "pullback_factor": float(trial.suggest_float("pullback_factor", pb_min, pb_max)),
+        }
+        if params["fast"] >= params["slow"]:
+            params["_invalid"] = True
+        return params
+    if key in ("louise", "louise_lucky"):
+        tp_min, tp_max = _get_float_range(overrides, "target_profit_pct_min", "target_profit_pct_max", 0.2, 5.0)
+        md_min, md_max = _get_float_range(overrides, "margin_drop_factor_min", "margin_drop_factor_max", 0.001, 0.03)
+        params = {
+            "target_profit_pct": float(trial.suggest_float("target_profit_pct", tp_min, tp_max)),
+            "margin_drop_factor": float(trial.suggest_float("margin_drop_factor", md_min, md_max)),
+            "quote_order_qty_usdt": 8.0,
+        }
+        if key.endswith("_lucky"):
+            params["lucky_window"] = int(trial.suggest_int("lucky_window", 8, 72))
+        return params
+    if key in ("anti_louise", "anti_louise_lucky"):
+        tp_min, tp_max = _get_float_range(overrides, "target_profit_pct_min", "target_profit_pct_max", 0.2, 5.0)
+        mr_min, mr_max = _get_float_range(overrides, "margin_rise_factor_min", "margin_rise_factor_max", 0.001, 0.03)
+        params = {
+            "target_profit_pct": float(trial.suggest_float("target_profit_pct", tp_min, tp_max)),
+            "margin_rise_factor": float(trial.suggest_float("margin_rise_factor", mr_min, mr_max)),
+            "quote_order_qty_usdt": 8.0,
+        }
+        if key.endswith("_lucky"):
+            params["lucky_window"] = int(trial.suggest_int("lucky_window", 8, 72))
+        return params
+    if key == "thusnelda":
         return {"placeholder_level": int(trial.suggest_int("placeholder_level", 1, 3))}
     fast_min, fast_max = _get_int_range(overrides, "fast_min", "fast_max", 5, 40)
     slow_min, slow_max = _get_int_range(overrides, "slow_min", "slow_max", 20, 120)
