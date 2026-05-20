@@ -1,6 +1,7 @@
 """SQLite helpers for market data and backtesting artifacts."""
 import json
 import sqlite3
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -106,9 +107,26 @@ def _utc_now() -> str:
 
 
 def _connect(path: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(path)
+    conn = sqlite3.connect(path, timeout=60.0)
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=60000")
     return conn
+
+
+def _run_db_write_with_retry(fn: Any, retries: int = 6, base_delay_sec: float = 0.2) -> Any:
+    """Retry transient sqlite lock errors with exponential backoff."""
+    attempt = 0
+    while True:
+        try:
+            return fn()
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            if "database is locked" not in msg and "database table is locked" not in msg:
+                raise
+            if attempt >= retries:
+                raise
+            time.sleep(base_delay_sec * (2**attempt))
+            attempt += 1
 
 
 def init_db(path: str) -> None:
@@ -116,6 +134,120 @@ def init_db(path: str) -> None:
     with conn:
         conn.executescript(SCHEMA + "\n" + BACKTEST_SCHEMA)
     conn.close()
+
+
+def normalize_epoch_ms(value: Any) -> int:
+    """Normalize epoch timestamps to milliseconds.
+
+    Accepts values in seconds, milliseconds, microseconds or nanoseconds.
+    """
+    v = int(float(value))
+    av = abs(v)
+    if av >= 100_000_000_000_000_000:  # nanoseconds
+        return int(v // 1_000_000)
+    if av >= 10_000_000_000_000:  # microseconds
+        return int(v // 1_000)
+    if av < 100_000_000_000:  # seconds
+        return int(v * 1_000)
+    return int(v)
+
+
+def cure_kline_row_format(row: Tuple) -> Tuple:
+    """Normalize one kline row to the expected internal format."""
+    if len(row) < 11:
+        raise ValueError("Kline row must have at least 11 fields")
+    open_time = normalize_epoch_ms(row[0])
+    close_time = normalize_epoch_ms(row[6]) if row[6] is not None else None
+    return (
+        open_time,
+        float(row[1]),
+        float(row[2]),
+        float(row[3]),
+        float(row[4]),
+        float(row[5]),
+        close_time,
+        float(row[7]) if row[7] not in ("", None) else None,
+        int(row[8]),
+        float(row[9]) if row[9] not in ("", None) else None,
+        float(row[10]) if row[10] not in ("", None) else None,
+        str(row[11]) if len(row) > 11 else "",
+    )
+
+
+def cure_klines_time_format(path: str, symbol: Optional[str] = None, interval: Optional[str] = None) -> Dict[str, int]:
+    """Detect and normalize stored kline timestamps to milliseconds.
+
+    Repairs rows persisted in seconds/microseconds/nanoseconds.
+    Returns number of updated rows by source format.
+    """
+    conn = _connect(path)
+    where = []
+    params: List[Any] = []
+    if symbol:
+        where.append("symbol = ?")
+        params.append(symbol)
+    if interval:
+        where.append("interval = ?")
+        params.append(interval)
+    where_sql = (" AND " + " AND ".join(where)) if where else ""
+
+    sec_count = 0
+    us_count = 0
+    ns_count = 0
+    with conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT COUNT(*) FROM klines WHERE open_time > 0 AND open_time < 100000000000{where_sql}",
+            tuple(params),
+        )
+        sec_count = int(cur.fetchone()[0] or 0)
+        if sec_count:
+            cur.execute(
+                f"""
+                UPDATE klines
+                SET
+                    open_time = open_time * 1000,
+                    close_time = CASE WHEN close_time IS NULL THEN NULL ELSE close_time * 1000 END
+                WHERE open_time > 0 AND open_time < 100000000000{where_sql}
+                """,
+                tuple(params),
+            )
+
+        cur.execute(
+            f"SELECT COUNT(*) FROM klines WHERE open_time >= 10000000000000 AND open_time < 100000000000000000{where_sql}",
+            tuple(params),
+        )
+        us_count = int(cur.fetchone()[0] or 0)
+        if us_count:
+            cur.execute(
+                f"""
+                UPDATE klines
+                SET
+                    open_time = open_time / 1000,
+                    close_time = CASE WHEN close_time IS NULL THEN NULL ELSE close_time / 1000 END
+                WHERE open_time >= 10000000000000 AND open_time < 100000000000000000{where_sql}
+                """,
+                tuple(params),
+            )
+
+        cur.execute(
+            f"SELECT COUNT(*) FROM klines WHERE open_time >= 100000000000000000{where_sql}",
+            tuple(params),
+        )
+        ns_count = int(cur.fetchone()[0] or 0)
+        if ns_count:
+            cur.execute(
+                f"""
+                UPDATE klines
+                SET
+                    open_time = open_time / 1000000,
+                    close_time = CASE WHEN close_time IS NULL THEN NULL ELSE close_time / 1000000 END
+                WHERE open_time >= 100000000000000000{where_sql}
+                """,
+                tuple(params),
+            )
+    conn.close()
+    return {"fixed_seconds_rows": sec_count, "fixed_microseconds_rows": us_count, "fixed_nanoseconds_rows": ns_count}
 
 
 def insert_klines(
@@ -130,22 +262,23 @@ def insert_klines(
         cur = conn.cursor()
         to_insert = []
         for r in rows:
+            cured = cure_kline_row_format(r)
             to_insert.append(
                 (
                     symbol,
                     interval,
-                    int(r[0]),
-                    float(r[1]),
-                    float(r[2]),
-                    float(r[3]),
-                    float(r[4]),
-                    float(r[5]),
-                    int(r[6]),
-                    float(r[7]) if r[7] != "" else None,
-                    int(r[8]),
-                    float(r[9]) if r[9] != "" else None,
-                    float(r[10]) if r[10] != "" else None,
-                    str(r[11]) if len(r) > 11 else "",
+                    int(cured[0]),
+                    float(cured[1]),
+                    float(cured[2]),
+                    float(cured[3]),
+                    float(cured[4]),
+                    float(cured[5]),
+                    int(cured[6]) if cured[6] is not None else None,
+                    cured[7],
+                    int(cured[8]),
+                    cured[9],
+                    cured[10],
+                    str(cured[11]) if len(cured) > 11 else "",
                 )
             )
         cur.executemany(
@@ -201,40 +334,50 @@ def create_bt_run(
     config: Optional[Dict[str, Any]] = None,
 ) -> int:
     conn = _connect(path)
-    with conn:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO bt_runs (
-                strategy_name, symbol, interval, start_ts, end_ts, initial_cash,
-                fee_rate, slippage_bps, config_json, status, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?)
-            """,
-            (
-                strategy_name,
-                symbol,
-                interval,
-                int(start_ts) if start_ts is not None else None,
-                int(end_ts) if end_ts is not None else None,
-                float(initial_cash),
-                float(fee_rate),
-                float(slippage_bps),
-                json.dumps(config or {}, ensure_ascii=False),
-                _utc_now(),
-            ),
-        )
-        run_id = int(cur.lastrowid or 0)
+    run_id = 0
+
+    def _op() -> None:
+        nonlocal run_id
+        with conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO bt_runs (
+                    strategy_name, symbol, interval, start_ts, end_ts, initial_cash,
+                    fee_rate, slippage_bps, config_json, status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?)
+                """,
+                (
+                    strategy_name,
+                    symbol,
+                    interval,
+                    int(start_ts) if start_ts is not None else None,
+                    int(end_ts) if end_ts is not None else None,
+                    float(initial_cash),
+                    float(fee_rate),
+                    float(slippage_bps),
+                    json.dumps(config or {}, ensure_ascii=False),
+                    _utc_now(),
+                ),
+            )
+            run_id = int(cur.lastrowid or 0)
+
+    _run_db_write_with_retry(_op)
     conn.close()
     return run_id
 
 
 def finish_bt_run(path: str, run_id: int, status: str = "completed") -> None:
     conn = _connect(path)
-    with conn:
-        conn.execute(
-            "UPDATE bt_runs SET status=?, ended_at=? WHERE run_id=?",
-            (status, _utc_now(), int(run_id)),
-        )
+
+    def _op() -> None:
+        with conn:
+            conn.execute(
+                "UPDATE bt_runs SET status=?, ended_at=? WHERE run_id=?",
+                (status, _utc_now(), int(run_id)),
+            )
+
+    _run_db_write_with_retry(_op)
     conn.close()
 
 
@@ -260,16 +403,20 @@ def insert_bt_events(path: str, run_id: int, events: Iterable[Dict[str, Any]]) -
     if not rows:
         return
     conn = _connect(path)
-    with conn:
-        conn.executemany(
-            """
-            INSERT INTO bt_events (
-                run_id, trial_id, seq, event_time, event_type, side, price, qty, cash,
-                equity, position_qty, payload_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            rows,
-        )
+
+    def _op() -> None:
+        with conn:
+            conn.executemany(
+                """
+                INSERT INTO bt_events (
+                    run_id, trial_id, seq, event_time, event_type, side, price, qty, cash,
+                    equity, position_qty, payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
+
+    _run_db_write_with_retry(_op)
     conn.close()
 
 
@@ -296,18 +443,22 @@ def upsert_bt_metrics(
     if not rows:
         return
     conn = _connect(path)
-    with conn:
-        conn.executemany(
-            """
-            INSERT INTO bt_metrics (run_id, trial_id, metric_name, metric_value, extra_json, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(run_id, trial_id, metric_name) DO UPDATE SET
-                metric_value=excluded.metric_value,
-                extra_json=excluded.extra_json,
-                created_at=excluded.created_at
-            """,
-            rows,
-        )
+
+    def _op() -> None:
+        with conn:
+            conn.executemany(
+                """
+                INSERT INTO bt_metrics (run_id, trial_id, metric_name, metric_value, extra_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_id, trial_id, metric_name) DO UPDATE SET
+                    metric_value=excluded.metric_value,
+                    extra_json=excluded.extra_json,
+                    created_at=excluded.created_at
+                """,
+                rows,
+            )
+
+    _run_db_write_with_retry(_op)
     conn.close()
 
 

@@ -7,7 +7,7 @@ Features:
 Rows are yielded as tuples matching the DB schema in `db.py`.
 """
 from typing import Iterator, Optional, Tuple
-import requests
+import requests  # type: ignore[import-untyped]
 import time
 import zipfile
 import io
@@ -73,8 +73,9 @@ class BinanceDownloader:
 
             # paginate: set next startTime to last open_time + 1ms
             last_open = int(data[-1][0])
-            params["startTime"] = last_open + 1
-            if end_ts is not None and params["startTime"] > end_ts:
+            next_start = last_open + 1
+            params["startTime"] = next_start
+            if end_ts is not None and next_start > end_ts:
                 break
 
     def download_klines_zip(self, symbol: str, interval: str, year: int, month: int) -> Iterator[Tuple]:
@@ -97,14 +98,21 @@ class BinanceDownloader:
                         text = io.TextIOWrapper(fh, encoding="utf-8")
                         reader = csv.reader(text)
                         for row in reader:
+                            open_time = int(row[0])
+                            close_time = int(row[6])
+                            # Some ZIP datasets may come in microseconds. Normalize to milliseconds.
+                            if open_time > 9_999_999_999_999:
+                                open_time //= 1000
+                            if close_time > 9_999_999_999_999:
+                                close_time //= 1000
                             yield (
-                                int(row[0]),
+                                open_time,
                                 float(row[1]),
                                 float(row[2]),
                                 float(row[3]),
                                 float(row[4]),
                                 float(row[5]),
-                                int(row[6]),
+                                close_time,
                                 float(row[7]) if row[7] != "" else None,
                                 int(row[8]),
                                 float(row[9]) if row[9] != "" else None,

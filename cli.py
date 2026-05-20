@@ -5,9 +5,9 @@ Usage examples are in README_BINANCE.md
 import argparse
 from datetime import datetime
 from binance_hist_downloader import BinanceDownloader
-from db import init_db, insert_klines
-from dateutil import parser as dateparser
-from tqdm import tqdm
+from db import cure_klines_time_format, init_db, insert_klines
+from dateutil import parser as dateparser  # type: ignore[import-untyped]
+from tqdm import tqdm  # type: ignore[import-untyped]
 
 
 def parse_time(s: str):
@@ -63,6 +63,14 @@ def main():
                 batch = []
         if batch:
             insert_klines(args.db, args.symbol, args.interval, batch)
+
+    # Safety net: normalize timestamps in case source format differs.
+    fixed = cure_klines_time_format(args.db, symbol=args.symbol, interval=args.interval)
+    total_fixed = int(sum(fixed.values()))
+    if total_fixed > 0:
+        print(f"[cure] normalized timestamp rows: {fixed}")
+    else:
+        print("[cure] no timestamp normalization needed.")
 
 
 if __name__ == "__main__":

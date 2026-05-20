@@ -28,6 +28,7 @@ class EngineConfig:
     ema_period: int = 20
     rsi_period: int = 14
     atr_period: int = 14
+    loop_seconds: Optional[int] = None
 
 
 @dataclass
@@ -98,8 +99,14 @@ def run_backtest(
     trade_pnls: List[float] = []
     seq = 0
     last_trade_entry: Optional[Tuple[float, float]] = None
+    last_exec_ts: Optional[int] = None
 
     for i, candle in enumerate(candles):
+        candle_ts = int(candle["open_time"])
+        if config.loop_seconds is not None and config.loop_seconds > 0 and last_exec_ts is not None:
+            if candle_ts - last_exec_ts < int(config.loop_seconds) * 1000:
+                continue
+        last_exec_ts = candle_ts
         px = float(candle.get("price_source", candle["close"]))
         equity = broker.mark_equity(px)
         equity_curve.append(equity)
@@ -121,7 +128,7 @@ def run_backtest(
                 strategy.on_fill(fill=fill, signal=signal, ctx=ctx)
                 event = Event(
                     seq=seq,
-                    event_time=int(candle["open_time"]),
+                    event_time=candle_ts,
                     event_type="fill",
                     side=fill["side"],
                     price=float(fill["price"]),
@@ -143,7 +150,7 @@ def run_backtest(
             else:
                 event = Event(
                     seq=seq,
-                    event_time=int(candle["open_time"]),
+                    event_time=candle_ts,
                     event_type="order_rejected",
                     side=signal.action,
                     cash=float(broker.state.cash),
@@ -158,7 +165,7 @@ def run_backtest(
             events.append(
                 Event(
                     seq=seq,
-                    event_time=int(candle["open_time"]),
+                    event_time=candle_ts,
                     event_type="hold",
                     cash=float(broker.state.cash),
                     equity=float(equity),
