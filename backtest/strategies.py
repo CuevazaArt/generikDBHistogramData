@@ -345,3 +345,38 @@ class HeikinAshiTrendStrategy(StrategyBase):
             return Signal(action="sell", size_pct=1.0, reason="ha_ma_cross_up_inverse", metadata={"mode": self.trend_mode})
         return Signal(action="hold")
 
+
+class MashaPlaceholderStrategy(StrategyBase):
+    """Temporary adapter for future Masha strategy integration."""
+
+    name = "masha"
+
+    def __init__(self, placeholder_level: int = 1, **params):
+        super().__init__(placeholder_level=placeholder_level, **params)
+        self.placeholder_level = max(1, int(placeholder_level))
+
+    def on_bar(self, ctx: StrategyContext) -> Signal:
+        _ = ctx
+        return Signal(
+            action="hold",
+            reason="placeholder_masha_pending_adapter",
+            metadata={"placeholder_level": self.placeholder_level},
+        )
+
+
+class ThusneldaPlaceholderStrategy(StrategyBase):
+    """Temporary adapter for future Thusnelda strategy integration."""
+
+    name = "thusnelda"
+
+    def __init__(self, placeholder_level: int = 1, **params):
+        super().__init__(placeholder_level=placeholder_level, **params)
+        self.placeholder_level = max(1, int(placeholder_level))
+
+    def on_bar(self, ctx: StrategyContext) -> Signal:
+        _ = ctx
+        return Signal(
+            action="hold",
+            reason="placeholder_thusnelda_pending_adapter",
+            metadata={"placeholder_level": self.placeholder_level},
+        )

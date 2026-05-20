@@ -27,6 +27,7 @@ def optimize_strategy(
     trials: int = 50,
     n_jobs: int = 1,
     timeout: Optional[int] = None,
+    search_overrides: Optional[Dict[str, Any]] = None,
 ) -> Any:
     if optuna is None:
         raise RuntimeError("Optuna is not installed. Run: pip install -r requirements.txt")
@@ -40,7 +41,7 @@ def optimize_strategy(
 
     def objective(trial: optuna.Trial) -> float:
         started_at = _utc_now()
-        params = suggest_params(trial, strategy_cls.name)
+        params = suggest_params(trial, strategy_cls.name, search_overrides=search_overrides)
         if params.get("_invalid"):
             raise optuna.exceptions.TrialPruned()
         params = {k: v for k, v in params.items() if not k.startswith("_")}
