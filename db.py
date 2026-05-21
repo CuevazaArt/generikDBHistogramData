@@ -634,6 +634,23 @@ def get_bt_signal_events(path: str, run_id: int) -> List[Tuple]:
     return rows
 
 
+def get_bt_run_events(path: str, run_id: int) -> List[Tuple]:
+    conn = _connect(path)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT seq, event_time, event_type, side, cash, equity, payload_json
+        FROM bt_events
+        WHERE run_id=?
+        ORDER BY seq ASC
+        """,
+        (int(run_id),),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
 def get_bt_run_descriptor(path: str, run_id: int) -> Optional[Dict[str, Any]]:
     conn = _connect(path)
     cur = conn.cursor()

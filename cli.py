@@ -25,7 +25,7 @@ def parse_time(s: str):
 
 def main():
     p = argparse.ArgumentParser(description="Descargar klines y guardarlos en sqlite")
-    p.add_argument("--mode", choices=("api", "zip"), default="api")
+    p.add_argument("--mode", choices=("api", "alpha_api", "zip"), default="api")
     p.add_argument("--symbol", required=True)
     p.add_argument("--interval", required=True)
     p.add_argument("--db", default="klines.db")
@@ -51,6 +51,28 @@ def main():
                 batch = []
         if batch:
             insert_klines(args.db, args.symbol, args.interval, batch)
+    elif args.mode == "alpha_api":
+        start_ts = parse_time(args.start) if args.start else None
+        end_ts = parse_time(args.end) if args.end else None
+        try:
+            alpha_symbol = dl.resolve_alpha_symbol(args.symbol)
+        except Exception as exc:
+            raise SystemExit(f"[alpha_api] failed resolving symbol '{args.symbol}': {exc}") from exc
+        print(f"[alpha_api] resolved {args.symbol.upper()} -> {alpha_symbol}")
+        try:
+            it = dl.download_klines_alpha_api(alpha_symbol, args.interval, start_ts=start_ts, end_ts=end_ts)
+            batch = []
+            for row in tqdm(it, desc="Downloading alpha"):
+                batch.append(row)
+                if len(batch) >= args.batch:
+                    insert_klines(args.db, args.symbol, args.interval, batch)
+                    batch = []
+            if batch:
+                insert_klines(args.db, args.symbol, args.interval, batch)
+        except Exception as exc:
+            raise SystemExit(
+                f"[alpha_api] failed downloading klines for resolved symbol '{alpha_symbol}': {exc}"
+            ) from exc
     else:
         if not args.year or not args.month:
             raise SystemExit("--year and --month required for zip mode")

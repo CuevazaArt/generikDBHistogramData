@@ -6,7 +6,8 @@ Features:
 
 Rows are yielded as tuples matching the DB schema in `db.py`.
 """
-from typing import Iterator, Optional, Tuple
+from difflib import get_close_matches
+from typing import Dict, Iterator, List, Optional, Tuple
 import requests  # type: ignore[import-untyped]
 import time
 import zipfile
@@ -16,7 +17,24 @@ import csv
 
 class BinanceDownloader:
     BASE_API = "https://api.binance.com"
+    BASE_ALPHA = "https://www.binance.com"
     DATA_ZIP_BASE = "https://data.binance.vision/data/spot/monthly/klines"
+    ALPHA_TOKEN_LIST_PATH = "/bapi/defi/v1/public/wallet-direct/buw/wallet/cex/alpha/all/token/list"
+    ALPHA_KLINES_PATH = "/bapi/defi/v1/public/alpha-trade/klines"
+    COMMON_QUOTE_ASSETS = (
+        "USDT",
+        "USDC",
+        "FDUSD",
+        "BUSD",
+        "BTC",
+        "ETH",
+        "BNB",
+        "TRY",
+        "EUR",
+        "BRL",
+        "DAI",
+        "TUSD",
+    )
 
     def __init__(self, session: Optional[requests.Session] = None):
         self.s = session or requests.Session()
@@ -72,6 +90,126 @@ class BinanceDownloader:
                 yield row
 
             # paginate: set next startTime to last open_time + 1ms
+            last_open = int(data[-1][0])
+            next_start = last_open + 1
+            params["startTime"] = next_start
+            if end_ts is not None and next_start > end_ts:
+                break
+
+    def get_alpha_token_list(self) -> List[Dict]:
+        """Return token metadata from Binance Alpha Token List endpoint."""
+        url = self.BASE_ALPHA + self.ALPHA_TOKEN_LIST_PATH
+        try:
+            r = self.s.get(url, timeout=30)
+        except requests.RequestException as exc:
+            raise RuntimeError(f"Alpha token list request failed: {exc}") from exc
+        if r.status_code != 200:
+            body = r.text[:300] if r.text else ""
+            raise RuntimeError(f"Alpha token list HTTP {r.status_code}: {body}")
+        try:
+            payload = r.json()
+        except Exception as exc:
+            raise RuntimeError("Alpha token list response is not valid JSON") from exc
+        if str(payload.get("code")) != "000000" or not payload.get("success", False):
+            raise RuntimeError(
+                f"Alpha token list API error: code={payload.get('code')} message={payload.get('message')}"
+            )
+        data = payload.get("data")
+        if not isinstance(data, list):
+            raise RuntimeError("Alpha token list payload does not contain a valid data list")
+        return data
+
+    def resolve_alpha_symbol(self, symbol: str) -> str:
+        """Map human symbol (e.g. VELOUSDT) to Alpha symbol (e.g. ALPHA_229USDT)."""
+        requested = symbol.strip().upper()
+        if requested.startswith("ALPHA_"):
+            return requested
+        quote = None
+        for q in self.COMMON_QUOTE_ASSETS:
+            if requested.endswith(q) and len(requested) > len(q):
+                quote = q
+                break
+        if not quote:
+            raise ValueError(
+                f"Cannot resolve Alpha symbol for '{symbol}': unsupported/unknown quote asset suffix"
+            )
+        base = requested[: -len(quote)]
+        tokens = self.get_alpha_token_list()
+        symbol_to_alpha_id: Dict[str, str] = {}
+        for token in tokens:
+            token_symbol = str(token.get("symbol", "")).upper()
+            alpha_id = str(token.get("alphaId", "")).upper()
+            if token_symbol and alpha_id.startswith("ALPHA_"):
+                symbol_to_alpha_id[token_symbol] = alpha_id
+        resolved_alpha_id = symbol_to_alpha_id.get(base)
+        if not resolved_alpha_id:
+            suggestions = get_close_matches(base, sorted(symbol_to_alpha_id.keys()), n=5, cutoff=0.65)
+            extra = f" Did you mean: {', '.join(suggestions)}?" if suggestions else ""
+            raise ValueError(f"Token '{base}' not found in Binance Alpha Token List.{extra}")
+        return f"{resolved_alpha_id}{quote}"
+
+    def download_klines_alpha_api(
+        self,
+        symbol: str,
+        interval: str,
+        start_ts: Optional[int] = None,
+        end_ts: Optional[int] = None,
+        limit: int = 1000,
+        sleep_on_rate_limit: float = 0.5,
+    ) -> Iterator[Tuple]:
+        """Yield kline rows from Binance Alpha Klines endpoint."""
+        alpha_symbol = symbol.strip().upper()
+        if limit > 1500:
+            limit = 1500
+        url = self.BASE_ALPHA + self.ALPHA_KLINES_PATH
+        params: Dict[str, int | str] = {"symbol": alpha_symbol, "interval": interval, "limit": int(limit)}
+        if start_ts is not None:
+            params["startTime"] = int(start_ts)
+        if end_ts is not None:
+            params["endTime"] = int(end_ts)
+
+        while True:
+            try:
+                r = self.s.get(url, params=params, timeout=30)
+            except requests.RequestException as exc:
+                raise RuntimeError(f"Alpha klines request failed for {alpha_symbol}: {exc}") from exc
+            if r.status_code == 429:
+                time.sleep(sleep_on_rate_limit)
+                continue
+            if r.status_code != 200:
+                body = r.text[:300] if r.text else ""
+                raise RuntimeError(f"Alpha klines HTTP {r.status_code} for {alpha_symbol}: {body}")
+            try:
+                payload = r.json()
+            except Exception as exc:
+                raise RuntimeError(f"Alpha klines response is not valid JSON for {alpha_symbol}") from exc
+            if str(payload.get("code")) != "000000" or not payload.get("success", False):
+                raise RuntimeError(
+                    f"Alpha klines API error for {alpha_symbol}: "
+                    f"code={payload.get('code')} message={payload.get('message')}"
+                )
+            data = payload.get("data")
+            if not data:
+                break
+            if not isinstance(data, list):
+                raise RuntimeError(f"Alpha klines payload data is not a list for {alpha_symbol}")
+            for item in data:
+                row = (
+                    int(item[0]),
+                    float(item[1]),
+                    float(item[2]),
+                    float(item[3]),
+                    float(item[4]),
+                    float(item[5]),
+                    int(item[6]),
+                    float(item[7]) if item[7] != "" else None,
+                    int(item[8]),
+                    float(item[9]) if item[9] != "" else None,
+                    float(item[10]) if item[10] != "" else None,
+                    str(item[11]) if len(item) > 11 else "",
+                )
+                yield row
+
             last_open = int(data[-1][0])
             next_start = last_open + 1
             params["startTime"] = next_start

@@ -2,8 +2,54 @@
 
 Reporte de las capacidades actuales del backtester y de la terminal `backtest_cli.py`.
 
-> Fecha de revisión: 2026-05-19  
+> Fecha de revisión: 2026-05-21  
 > Entrypoint principal: `python backtest_cli.py --db klines.db menu`
+
+---
+
+## 0. Directivas operativas del tester (obligatorias)
+
+Estas directivas aplican antes y durante cualquier ejecución de pruebas/backtests:
+
+1. **Leer directivas antes de empezar**  
+   Antes de cualquier trabajo, revisar primero este documento y las directivas de operación vigentes del proyecto.
+
+2. **Guardia de memoria RAM (80%)**  
+   No iniciar ni mantener corridas que lleven el sistema por encima del 80% de RAM comprometida.  
+   Si la memoria supera ese umbral, pausar/detener y reanudar en bloques más pequeños.
+
+3. **Para timeframes pesados (ej. `1s` anual), correr por bloques**  
+   Priorizar ejecución mensual/trimestral en lugar de un año completo en una sola corrida.
+
+4. **Validación previa mínima**  
+   Antes de correr un backtest largo:
+   - confirmar cobertura de datos (`count`, `min(open_time)`, `max(open_time)`),
+   - confirmar espacio libre en disco,
+   - confirmar que no hay otra corrida pesada en paralelo.
+
+5. **Persistencia y recuperación**  
+   Si el SO está inestable, preferir:
+   - DB en disco con mayor capacidad/rendimiento,
+   - corridas chunked (mes a mes),
+   - checkpoints/reportes por bloque para no perder progreso.
+
+6. **Entregables mínimos por cada run testeada**  
+   Toda corrida validada debe dejar un paquete mínimo en `reports/runs/run_<id>/` con:
+   - `run_<id>_integrated_report.md`
+   - `run_<id>_metrics.json`
+   - `run_<id>_report.json`
+   - `run_<id>_final_table.md`
+   - `run_<id>_equity.csv`
+   - Gráficas clave: `equity`, `drawdown`, `returns_hist`, `trade_signal_hist`, `signal_activation_hist`.
+
+7. **Contenido mínimo del `integrated_report`**  
+   El reporte integrado debe incluir, como mínimo:
+   - Identificación de la corrida: `run_id`, estrategia, símbolo, timeframe, ventana temporal.
+   - Parámetros usados del bot y configuración operativa (incluyendo loop si aplica).
+   - Tabla/resumen de resultados: `initial_cash`, `final_equity`, `total_return`, `max_drawdown`, `num_trades`.
+   - Lectura práctica breve: puntos fuertes, riesgos y recomendación operativa.
+   - Referencia a gráficos generados y ubicación de archivos.
+   - Si hubo optimización previa: rango de búsqueda y step de parámetros clave (para replicabilidad).
 
 ---
 
@@ -186,3 +232,31 @@ Las primeras tres adicionales (`sortino`, `calmar`, `ulcer_index`) ayudan a dist
 3. **Engine multi-activo** para destrabar `thusnelda` y hubs reales.
 4. **Walk-forward multi-fold** (varios train/validation rodantes) para honestidad estadística mayor.
 5. **Modularizar `backtest_cli.py`** en `cli/format.py`, `cli/menu.py`, `cli/commands.py` para reducir su tamaño.
+
+---
+
+## 11. Propuestas de evolución técnica (pendiente, no implementado)
+
+Estas propuestas se documentan para etapas futuras. El proyecto actual sigue operando con el stack vigente.
+
+1. **Arquitectura híbrida por capas (recomendada)**  
+   - Mantener `Python` para CLI, orquestación, análisis y reportes.  
+   - Mover el core de simulación intensiva a `Rust` o `C++` (con bindings hacia Python) para mejorar rendimiento y estabilidad.
+
+2. **Pipeline de datos orientado a alto volumen**  
+   - Usar `Parquet` particionado por `symbol/interval/año/mes` para históricos masivos.  
+   - Usar `DuckDB`/`Polars` para lectura y agregación rápida en local.  
+   - Mantener SQLite para metadatos de runs/trials/reportes (no como canal principal de ticks/eventos masivos).
+
+3. **Paralelización segura**  
+   - Usar `Ray` o `Dask` para distribuir optimizaciones/chunks en CPU.  
+   - Evitar paralelismo de escritura intensa sobre una sola DB SQLite.
+
+4. **Estrategia de granularidad por costo/beneficio**  
+   - `1m` como baseline para optimización general.  
+   - `1s` para validación puntual en ventanas críticas, en modo chunked (mensual/trimestral).
+
+5. **Objetivo operativo**  
+   - Reducir riesgo de colapso de hardware local.  
+   - Aumentar reproducibilidad y throughput de backtests sin cambiar la UX principal de terminal.
+
