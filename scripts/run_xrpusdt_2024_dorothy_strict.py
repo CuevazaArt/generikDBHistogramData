@@ -14,6 +14,7 @@ from backtest.engine import EngineConfig
 from backtest.guards import ResourceGuard, ResourceGuardConfig
 from backtest.report_paths import strict_report_dir, write_manifest
 from backtest.registry import get_strategy
+from backtest.repro import git_snapshot
 from backtest.resources import detect_resources, estimate_worker_ram_bytes
 from backtest.runner import execute_and_persist
 from backtest.storage import summarize_run
@@ -350,6 +351,7 @@ def run(args: argparse.Namespace) -> None:
         "quarter_windows": quarter_windows,
         "candidates": candidates,
         "best_candidate": best_candidate,
+        "code_version": git_snapshot(),
     }
     manifest_path = os.path.join(output_dir, "run_manifest.json")
     with open(manifest_path, "w", encoding="utf-8") as fh:

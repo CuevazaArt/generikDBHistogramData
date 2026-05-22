@@ -353,6 +353,52 @@ def _cleanup(args: argparse.Namespace) -> None:
     print({"aborted_runs": aborted["aborted_runs"], **purged})
 
 
+def _cache(args: argparse.Namespace) -> None:
+    """Manage the optional Parquet cache for kline windows.
+
+    Subactions:
+      - materialize: build per-month Parquet files for a symbol/interval/window.
+      - verify: report which monthly buckets exist and which are missing.
+
+    Both honor `BACKTEST_PARQUET_CACHE` by checking pyarrow availability and
+    falling back gracefully when missing.
+    """
+    from backtest.data_cache import (
+        CACHE_ROOT_DEFAULT,
+        _bucket_path,
+        _month_buckets,
+        is_available,
+        materialize_window,
+    )
+
+    if not is_available():
+        print({"status": "unavailable", "reason": "pyarrow not installed"})
+        return
+
+    if args.action == "materialize":
+        paths = materialize_window(
+            db_path=args.db,
+            symbol=args.symbol,
+            interval=args.interval,
+            start_ts=int(args.start_ts),
+            end_ts=int(args.end_ts),
+            cache_root=args.cache_root,
+            overwrite=bool(args.overwrite),
+        )
+        print({"status": "ok", "files": paths, "count": len(paths)})
+        return
+
+    if args.action == "verify":
+        present, missing = [], []
+        for year, month, _bs, _be in _month_buckets(int(args.start_ts), int(args.end_ts)):
+            p = _bucket_path(args.cache_root, args.symbol, args.interval, year, month)
+            (present if os.path.exists(p) else missing).append(p)
+        print({"status": "ok", "present": present, "missing": missing})
+        return
+
+    print({"status": "error", "reason": f"unknown cache action: {args.action}"})
+
+
 def _build_separator(width: int = 60) -> str:
     return "-" * width
 
@@ -558,6 +604,15 @@ def main() -> None:
     p_clean = sub.add_parser("cleanup", help="Marcar runs colgados como aborted y purgar eventos")
     p_clean.add_argument("--purge_events", action="store_true")
 
+    p_cache = sub.add_parser("cache", help="Gestionar cache columnar Parquet de klines")
+    p_cache.add_argument("action", choices=("materialize", "verify"))
+    p_cache.add_argument("--symbol", required=True)
+    p_cache.add_argument("--interval", required=True)
+    p_cache.add_argument("--start_ts", type=int, required=True, help="Inicio del periodo (ms UTC)")
+    p_cache.add_argument("--end_ts", type=int, required=True, help="Fin del periodo (ms UTC)")
+    p_cache.add_argument("--cache_root", default="reports/cache/parquet")
+    p_cache.add_argument("--overwrite", action="store_true")
+
     sub.add_parser("menu")
     args = parser.parse_args()
     init_db(args.db)
@@ -573,6 +628,8 @@ def main() -> None:
         _sweet_spot(args)
     elif args.cmd == "cleanup":
         _cleanup(args)
+    elif args.cmd == "cache":
+        _cache(args)
     else:
         _menu(args.db)
 

@@ -1,0 +1,39 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.11", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Compile sanity (py_compile on edited modules)
+        run: |
+          python -m py_compile backtest/resources.py backtest/guards.py backtest/engine.py backtest/runner.py backtest/storage.py backtest/data_feed.py backtest/data_cache.py backtest/sweet_spot.py backtest/optimize.py backtest/scheduler.py backtest/telemetry.py backtest/events_parquet.py backtest/data_integrity.py db.py binance_hist_downloader.py backtest_cli.py scripts/run_xrpusdt_2024_dorothy_strict.py scripts/launch_xrpusdt_2024_dorothy_pf_parallel.py
+
+      - name: Run tests
+        env:
+          PYTHONPATH: .
+        run: python -m pytest tests/ -q --no-header
