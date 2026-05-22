@@ -7,7 +7,6 @@ from db import (
     finish_bt_run,
     get_bt_equity_curve,
     get_bt_recent_events,
-    get_bt_run_events,
     get_bt_run_descriptor,
     get_bt_run_events,
     get_bt_run_metrics,
@@ -52,8 +51,13 @@ def finish_run(db_path: str, run_id: int, status: str = "completed") -> None:
     finish_bt_run(db_path, run_id=run_id, status=status)
 
 
-def persist_run_events(db_path: str, run_id: int, events: List[Dict[str, Any]]) -> None:
-    insert_bt_events(db_path, run_id=run_id, events=events)
+def persist_run_events(
+    db_path: str,
+    run_id: int,
+    events: List[Dict[str, Any]],
+    batch_size: int = 5000,
+) -> None:
+    insert_bt_events(db_path, run_id=run_id, events=events, batch_size=batch_size)
 
 
 def persist_run_metrics(
@@ -138,8 +142,4 @@ def run_events(db_path: str, run_id: int) -> List[Tuple]:
 
 def study_trials(db_path: str, study_name: str, limit: int = 1000) -> List[Tuple]:
     return get_bt_study_trials(db_path, study_name=study_name, limit=limit)
-
-
-def run_events(db_path: str, run_id: int) -> List[Tuple]:
-    return get_bt_run_events(db_path, run_id=run_id)
 

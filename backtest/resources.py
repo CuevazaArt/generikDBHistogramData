@@ -21,11 +21,13 @@ except ImportError:  # pragma: no cover - runtime guard
     psutil = None
 
 
-EXECUTION_MODES = ("safe", "balanced", "max-stable")
+EXECUTION_MODES = ("safe", "balanced", "max-stable", "adaptive_80")
 
 # Fractions of CPU and RAM to dedicate to optimization workers per mode.
-_MODE_CPU_FRACTION = {"safe": 0.50, "balanced": 0.70, "max-stable": 0.85}
-_MODE_RAM_FRACTION = {"safe": 0.40, "balanced": 0.60, "max-stable": 0.75}
+# `adaptive_80` is the new default for intensive/parallel workloads:
+# it targets 80% of CPU/RAM and lets `ResourceGuard` keep us there.
+_MODE_CPU_FRACTION = {"safe": 0.50, "balanced": 0.70, "max-stable": 0.85, "adaptive_80": 0.80}
+_MODE_RAM_FRACTION = {"safe": 0.40, "balanced": 0.60, "max-stable": 0.75, "adaptive_80": 0.80}
 
 # Empirical defaults assuming each worker loads ~1 candle slice in memory.
 # Storing 1 candle ~ 200 bytes in dict form; we keep a safety multiplier.
@@ -70,18 +72,18 @@ def estimate_worker_ram_bytes(dataset_candles: Optional[int]) -> int:
 
 
 def recommend_n_jobs(
-    mode: str = "balanced",
+    mode: str = "adaptive_80",
     dataset_candles: Optional[int] = None,
     profile: Optional[ResourceProfile] = None,
     explicit_cap: Optional[int] = None,
 ) -> int:
     """Return a safe worker count for `mode`, bounded by available CPU/RAM.
 
-    `mode` ∈ {"safe", "balanced", "max-stable"}.
+    `mode` ∈ {"safe", "balanced", "max-stable", "adaptive_80"}.
     `dataset_candles` is used to estimate per-worker RAM.
     `explicit_cap` lets the caller hard-cap the result (e.g. user override).
     """
-    mode = (mode or "balanced").strip().lower()
+    mode = (mode or "adaptive_80").strip().lower()
     if mode not in EXECUTION_MODES:
         raise ValueError(f"Unknown mode '{mode}'. Use one of: {', '.join(EXECUTION_MODES)}")
 
@@ -105,7 +107,7 @@ def recommend_n_jobs(
 
 
 def explain_recommendation(
-    mode: str = "balanced",
+    mode: str = "adaptive_80",
     dataset_candles: Optional[int] = None,
     profile: Optional[ResourceProfile] = None,
     explicit_cap: Optional[int] = None,

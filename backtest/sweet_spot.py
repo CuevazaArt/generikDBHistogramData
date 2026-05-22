@@ -67,6 +67,10 @@ class SweetSpotConfig:
     guard_backoff_sec: float = 10.0
     # Chunk coarse optimization into waves for adaptive n_jobs.
     coarse_wave_trials: int = 12
+    # Optional split-storage layout for heavy parallel optimization:
+    # when set, Optuna's RDB storage is isolated from `db_path`
+    # (which keeps holding `klines` reads and `bt_events` writes).
+    optuna_storage_db: Optional[str] = None
 
 
 @dataclass
@@ -178,6 +182,7 @@ def run_sweet_spot_search(
                 seed=cfg.coarse_seed,
             ),
             events_mode="lite",
+            optuna_storage_db=cfg.optuna_storage_db,
         )
         remaining_trials -= wave_trials
 

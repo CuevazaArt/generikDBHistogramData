@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, Tuple, Type
 from backtest.broker import SpotBroker
 from backtest.data_feed import candles_to_dicts, load_candles
 from backtest.events import Event
-from backtest.indicators import apply_indicators
+from backtest.indicators import _rolling_sma, apply_indicators
 from backtest.metrics import summarize_metrics
 from backtest.strategy_base import StrategyBase, StrategyContext
 from backtest.transforms import apply_candle_source, apply_heikin_ashi
@@ -56,14 +56,25 @@ class BacktestResult:
 
 
 def _add_custom_smas(candles: List[Dict], fast: int, slow: int) -> None:
-    # Reuse indicator pipe: run two passes and store named columns.
-    tmp_fast = [dict(c) for c in candles]
-    apply_indicators(tmp_fast, sma_period=fast, ema_period=fast, rsi_period=14, atr_period=14, price_key="price_source")
-    tmp_slow = [dict(c) for c in candles]
-    apply_indicators(tmp_slow, sma_period=slow, ema_period=slow, rsi_period=14, atr_period=14, price_key="price_source")
-    for i in range(len(candles)):
-        candles[i][f"sma_{fast}"] = tmp_fast[i].get("sma")
-        candles[i][f"sma_{slow}"] = tmp_slow[i].get("sma")
+    """Compute named SMA columns without cloning the candle list twice.
+
+    Previously this triplicated the candle list (a fast clone + a slow clone)
+    just to reuse `apply_indicators`. For 1s annual data that was tens of
+    millions of dicts copied per worker. We now extract the price series once
+    and compute both SMAs in a single pass via the same rolling helper used
+    by `apply_indicators`, then write the results directly back onto the
+    original candle dicts.
+    """
+    if not candles:
+        return
+    prices = [float(c.get("price_source", c["close"])) for c in candles]
+    fast_vals = _rolling_sma(prices, fast)
+    slow_vals = _rolling_sma(prices, slow)
+    fast_key = f"sma_{fast}"
+    slow_key = f"sma_{slow}"
+    for i, c in enumerate(candles):
+        c[fast_key] = fast_vals[i]
+        c[slow_key] = slow_vals[i]
 
 
 def run_backtest(
@@ -72,17 +83,26 @@ def run_backtest(
     strategy_params: Optional[Dict] = None,
     run_id: Optional[int] = None,
     trial_id: Optional[int] = None,
+    candles: Optional[List[Dict]] = None,
 ) -> BacktestResult:
+    """Execute a single backtest.
+
+    If `candles` is provided, the engine skips DB loading and uses the
+    supplied list as-is. This lets orchestrators chunk the data externally
+    (see `backtest.data_feed.iter_candles_chunked`) so RAM stays bounded
+    per worker on very long windows.
+    """
     strategy_params = strategy_params or {}
-    candles = candles_to_dicts(
-        load_candles(
-            config.db_path,
-            symbol=config.symbol,
-            interval=config.interval,
-            start_ts=config.start_ts,
-            end_ts=config.end_ts,
+    if candles is None:
+        candles = candles_to_dicts(
+            load_candles(
+                config.db_path,
+                symbol=config.symbol,
+                interval=config.interval,
+                start_ts=config.start_ts,
+                end_ts=config.end_ts,
+            )
         )
-    )
     if config.use_heikin_ashi:
         candles = apply_heikin_ashi(candles)
         source = "ha_close"

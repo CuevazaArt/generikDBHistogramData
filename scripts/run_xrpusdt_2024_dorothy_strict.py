@@ -14,9 +14,11 @@ from backtest.engine import EngineConfig
 from backtest.guards import ResourceGuard, ResourceGuardConfig
 from backtest.report_paths import strict_report_dir, write_manifest
 from backtest.registry import get_strategy
+from backtest.repro import git_snapshot
 from backtest.resources import detect_resources, estimate_worker_ram_bytes
 from backtest.runner import execute_and_persist
 from backtest.storage import summarize_run
+from backtest.telemetry import TelemetryConfig, TelemetryRecorder, estimate_workload
 
 
 def _now_tag() -> str:
@@ -259,6 +261,25 @@ def run(args: argparse.Namespace) -> None:
     max_rungs = min(200, math.floor(args.initial_cash / quote_order_qty))
     yearly_candles = _count_candles(args.db, args.symbol, args.interval, args.start_ts, args.end_ts)
     resources = _decide_resource_cap(combo_count=len(profit_values), dataset_candles=yearly_candles, cpu_cap_pct=args.cpu_cap_pct)
+
+    if bool(getattr(args, "explain_only", False)):
+        # Dry-run: estimate cost without touching DB or spawning work.
+        explain = {
+            "study_preview": True,
+            "symbol": args.symbol,
+            "interval": args.interval,
+            "yearly_candle_count": yearly_candles,
+            "profit_factor_grid": profit_values,
+            "max_rungs": max_rungs,
+            "resource_plan": resources,
+            "workload_estimate": estimate_workload(
+                dataset_candles=yearly_candles,
+                n_trials=len(profit_values) * len(quarter_windows),
+            ),
+        }
+        print(json.dumps(explain, ensure_ascii=False, indent=2))
+        return
+
     stale_runs = abort_stale_runs(args.db)
     guard = _guard_from_args(args)
     guard_events: List[Dict[str, Any]] = []
@@ -272,6 +293,8 @@ def run(args: argparse.Namespace) -> None:
         summary="Quarterly chained strict run artifacts.",
     )
     strategy_cls = get_strategy("dorothy")
+    telemetry = TelemetryRecorder(TelemetryConfig(output_dir=output_dir))
+    telemetry.sample(phase="run:start", extra={"profit_grid": profit_values, "max_rungs": max_rungs})
 
     candidates: List[Dict[str, Any]] = []
     for pf in profit_values:
@@ -281,6 +304,7 @@ def run(args: argparse.Namespace) -> None:
             "quote_order_qty_usdt": float(quote_order_qty),
             "max_rungs": int(max_rungs),
         }
+        telemetry.sample(phase=f"pf:{pf}:start")
         candidates.append(
             _run_chain_for_profit_factor(
                 args=args,
@@ -291,6 +315,7 @@ def run(args: argparse.Namespace) -> None:
                 guard_events=guard_events,
             )
         )
+        telemetry.sample(phase=f"pf:{pf}:end")
 
     if not candidates:
         raise RuntimeError("No se genero ningun candidato para evaluar")
@@ -326,12 +351,15 @@ def run(args: argparse.Namespace) -> None:
         "quarter_windows": quarter_windows,
         "candidates": candidates,
         "best_candidate": best_candidate,
+        "code_version": git_snapshot(),
     }
     manifest_path = os.path.join(output_dir, "run_manifest.json")
     with open(manifest_path, "w", encoding="utf-8") as fh:
         json.dump(payload, fh, ensure_ascii=False, indent=2)
     log_path = os.path.join(output_dir, "RESTART_LOG.md")
     _write_log_markdown(log_path, payload)
+    telemetry.sample(phase="run:end")
+    telemetry.close()
     print(json.dumps({"study_name": study_name, "output_dir": output_dir, "best_candidate": best_candidate}, ensure_ascii=False, indent=2))
 
 
@@ -356,6 +384,11 @@ def main() -> None:
     parser.add_argument("--guard_recover_windows", type=int, default=None)
     parser.add_argument("--guard_backoff_sec", type=float, default=10.0)
     parser.add_argument("--output_root", default="reports")
+    parser.add_argument(
+        "--explain_only",
+        action="store_true",
+        help="Print resource/workload estimate and exit without running the chain.",
+    )
     run(parser.parse_args())
 
 

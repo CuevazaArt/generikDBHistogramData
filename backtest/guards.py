@@ -25,11 +25,14 @@ def _utc_now() -> str:
 
 @dataclass
 class ResourceGuardConfig:
-    cpu_cap_pct: float = 90.0
-    ram_cap_pct: float = 90.0
+    # Adaptive-80 default: target 80% of CPU/RAM, never exceed.
+    cpu_cap_pct: float = 80.0
+    ram_cap_pct: float = 80.0
     sample_sec: float = 5.0
     high_watermark_windows: int = 3
     recover_windows: int = 3
+    # Headroom under the cap that is considered "safe to scale up".
+    scale_up_headroom_pct: float = 15.0
 
     @staticmethod
     def from_env(prefix: str = "BACKTEST_GUARD_") -> "ResourceGuardConfig":
@@ -52,11 +55,12 @@ class ResourceGuardConfig:
                 return default
 
         return ResourceGuardConfig(
-            cpu_cap_pct=_float("CPU_CAP_PCT", 90.0),
-            ram_cap_pct=_float("RAM_CAP_PCT", 90.0),
+            cpu_cap_pct=_float("CPU_CAP_PCT", 80.0),
+            ram_cap_pct=_float("RAM_CAP_PCT", 80.0),
             sample_sec=max(0.5, _float("SAMPLE_SEC", 5.0)),
             high_watermark_windows=max(1, _int("HIGH_WATERMARK_WINDOWS", 3)),
             recover_windows=max(1, _int("RECOVER_WINDOWS", 3)),
+            scale_up_headroom_pct=max(0.0, _float("SCALE_UP_HEADROOM_PCT", 15.0)),
         )
 
 
@@ -70,8 +74,7 @@ class ResourceGuard:
         self._recover_history: Deque[bool] = deque(maxlen=self._max_windows)
         self._last_sample_monotonic = 0.0
         self._throttle = False
-        self._last_snapshot: Dict[str, Any] = self._empty_snapshot(reason="init")
-        self._pending_events: List[Dict[str, Any]] = []
+        # `_enabled` must be set before any call that touches `_empty_snapshot`.
         self._enabled = psutil is not None
         if self._enabled:
             try:
@@ -79,6 +82,8 @@ class ResourceGuard:
                 psutil.cpu_percent(interval=None)
             except Exception:
                 self._enabled = False
+        self._last_snapshot: Dict[str, Any] = self._empty_snapshot(reason="init")
+        self._pending_events: List[Dict[str, Any]] = []
 
     def _empty_snapshot(self, reason: str) -> Dict[str, Any]:
         return {
@@ -173,12 +178,28 @@ class ResourceGuard:
         self._refresh(force=False)
         return bool(self._throttle)
 
+    def should_scale_up(self) -> bool:
+        """True when CPU/RAM are below cap minus headroom and not throttled."""
+        snap = self._refresh(force=False)
+        if self._throttle:
+            return False
+        cpu = snap.get("cpu_pct")
+        ram = snap.get("ram_pct")
+        if cpu is None or ram is None:
+            return True  # no telemetry, optimistic ramp-up
+        headroom = float(self.config.scale_up_headroom_pct)
+        return bool(
+            float(cpu) < (float(self.config.cpu_cap_pct) - headroom)
+            and float(ram) < (float(self.config.ram_cap_pct) - headroom)
+        )
+
     def suggest_concurrency(self, current: int, min: int = 1) -> int:
         current = max(int(min), int(current))
-        throttled = self.should_throttle()
-        if throttled:
+        if self.should_throttle():
             return max(int(min), (current + 1) // 2)
-        return max(int(min), current + 1)
+        if self.should_scale_up():
+            return max(int(min), current + 1)
+        return current
 
     def snapshot(self) -> Dict[str, Any]:
         return self._refresh(force=False)

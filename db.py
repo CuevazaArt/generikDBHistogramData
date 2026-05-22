@@ -107,9 +107,20 @@ def _utc_now() -> str:
 
 
 def _connect(path: str) -> sqlite3.Connection:
+    """Open SQLite with PRAGMAs tuned for heavy parallel write workloads.
+
+    - WAL journaling lets many readers coexist with one writer per file.
+    - `synchronous=NORMAL` is safe under WAL and ~2-5x faster than FULL.
+    - `temp_store=MEMORY` and a larger cache reduce IO during big batches.
+    - `mmap_size` lets the OS page-cache assist large sequential scans.
+    """
     conn = sqlite3.connect(path, timeout=60.0)
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA busy_timeout=60000")
+    conn.execute("PRAGMA temp_store=MEMORY")
+    conn.execute("PRAGMA cache_size=-65536")  # ~64 MB negative = KB units
+    conn.execute("PRAGMA mmap_size=268435456")  # 256 MB if supported
     return conn
 
 
@@ -321,6 +332,42 @@ def query_klines(
     return rows
 
 
+def iter_query_klines(
+    path: str,
+    symbol: str,
+    interval: str,
+    start_ts: Optional[int] = None,
+    end_ts: Optional[int] = None,
+    fetch_size: int = 10000,
+):
+    """Yield kline rows in `fetch_size` batches without materializing all.
+
+    Keeps RAM bounded for very large rage queries (e.g. 1s annual ~ 31M rows).
+    The connection stays open until the generator is exhausted/closed.
+    """
+    conn = _connect(path)
+    cur = conn.cursor()
+    sql = "SELECT * FROM klines WHERE symbol=? AND interval=?"
+    params: List[Any] = [symbol, interval]
+    if start_ts is not None:
+        sql += " AND open_time>=?"
+        params.append(int(start_ts))
+    if end_ts is not None:
+        sql += " AND open_time<=?"
+        params.append(int(end_ts))
+    sql += " ORDER BY open_time ASC"
+    try:
+        cur.execute(sql, params)
+        while True:
+            rows = cur.fetchmany(max(1, int(fetch_size)))
+            if not rows:
+                return
+            for row in rows:
+                yield row
+    finally:
+        conn.close()
+
+
 def create_bt_run(
     path: str,
     strategy_name: str,
@@ -381,43 +428,64 @@ def finish_bt_run(path: str, run_id: int, status: str = "completed") -> None:
     conn.close()
 
 
-def insert_bt_events(path: str, run_id: int, events: Iterable[Dict[str, Any]]) -> None:
-    rows = []
-    for e in events:
-        rows.append(
-            (
-                int(run_id),
-                int(e["trial_id"]) if e.get("trial_id") is not None else None,
-                int(e["seq"]),
-                int(e["event_time"]) if e.get("event_time") is not None else None,
-                str(e["event_type"]),
-                e.get("side"),
-                float(e["price"]) if e.get("price") is not None else None,
-                float(e["qty"]) if e.get("qty") is not None else None,
-                float(e["cash"]) if e.get("cash") is not None else None,
-                float(e["equity"]) if e.get("equity") is not None else None,
-                float(e["position_qty"]) if e.get("position_qty") is not None else None,
-                json.dumps(e.get("payload", {}), ensure_ascii=False),
-            )
+def insert_bt_events(
+    path: str,
+    run_id: int,
+    events: Iterable[Dict[str, Any]],
+    batch_size: int = 5000,
+) -> None:
+    """Insert run events using `executemany` flushed in batches.
+
+    Batching keeps RAM bounded for very long runs (millions of events) and
+    reduces SQLite lock-hold time, lowering contention when many workers
+    write to neighbouring tables in the same DB file.
+    """
+
+    def _row(e: Dict[str, Any]) -> Tuple[Any, ...]:
+        return (
+            int(run_id),
+            int(e["trial_id"]) if e.get("trial_id") is not None else None,
+            int(e["seq"]),
+            int(e["event_time"]) if e.get("event_time") is not None else None,
+            str(e["event_type"]),
+            e.get("side"),
+            float(e["price"]) if e.get("price") is not None else None,
+            float(e["qty"]) if e.get("qty") is not None else None,
+            float(e["cash"]) if e.get("cash") is not None else None,
+            float(e["equity"]) if e.get("equity") is not None else None,
+            float(e["position_qty"]) if e.get("position_qty") is not None else None,
+            json.dumps(e.get("payload", {}), ensure_ascii=False),
         )
-    if not rows:
-        return
+
+    batch_size = max(1, int(batch_size))
+    buffer: List[Tuple[Any, ...]] = []
     conn = _connect(path)
+    insert_sql = (
+        "INSERT INTO bt_events ("
+        "run_id, trial_id, seq, event_time, event_type, side, price, qty, cash,"
+        " equity, position_qty, payload_json"
+        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    )
 
-    def _op() -> None:
-        with conn:
-            conn.executemany(
-                """
-                INSERT INTO bt_events (
-                    run_id, trial_id, seq, event_time, event_type, side, price, qty, cash,
-                    equity, position_qty, payload_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                rows,
-            )
+    def _flush(rows: List[Tuple[Any, ...]]) -> None:
+        if not rows:
+            return
 
-    _run_db_write_with_retry(_op)
-    conn.close()
+        def _op() -> None:
+            with conn:
+                conn.executemany(insert_sql, rows)
+
+        _run_db_write_with_retry(_op)
+
+    try:
+        for e in events:
+            buffer.append(_row(e))
+            if len(buffer) >= batch_size:
+                _flush(buffer)
+                buffer.clear()
+        _flush(buffer)
+    finally:
+        conn.close()
 
 
 def upsert_bt_metrics(

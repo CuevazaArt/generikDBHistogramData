@@ -353,6 +353,52 @@ def _cleanup(args: argparse.Namespace) -> None:
     print({"aborted_runs": aborted["aborted_runs"], **purged})
 
 
+def _cache(args: argparse.Namespace) -> None:
+    """Manage the optional Parquet cache for kline windows.
+
+    Subactions:
+      - materialize: build per-month Parquet files for a symbol/interval/window.
+      - verify: report which monthly buckets exist and which are missing.
+
+    Both honor `BACKTEST_PARQUET_CACHE` by checking pyarrow availability and
+    falling back gracefully when missing.
+    """
+    from backtest.data_cache import (
+        CACHE_ROOT_DEFAULT,
+        _bucket_path,
+        _month_buckets,
+        is_available,
+        materialize_window,
+    )
+
+    if not is_available():
+        print({"status": "unavailable", "reason": "pyarrow not installed"})
+        return
+
+    if args.action == "materialize":
+        paths = materialize_window(
+            db_path=args.db,
+            symbol=args.symbol,
+            interval=args.interval,
+            start_ts=int(args.start_ts),
+            end_ts=int(args.end_ts),
+            cache_root=args.cache_root,
+            overwrite=bool(args.overwrite),
+        )
+        print({"status": "ok", "files": paths, "count": len(paths)})
+        return
+
+    if args.action == "verify":
+        present, missing = [], []
+        for year, month, _bs, _be in _month_buckets(int(args.start_ts), int(args.end_ts)):
+            p = _bucket_path(args.cache_root, args.symbol, args.interval, year, month)
+            (present if os.path.exists(p) else missing).append(p)
+        print({"status": "ok", "present": present, "missing": missing})
+        return
+
+    print({"status": "error", "reason": f"unknown cache action: {args.action}"})
+
+
 def _build_separator(width: int = 60) -> str:
     return "-" * width
 
@@ -429,8 +475,9 @@ def _menu(db_path: str) -> None:
             strategy = (input("Estrategia [dorothy|sma_cross] (def dorothy): ").strip() or "dorothy").lower()
             start_ts = input("start_ts (ms UTC, requerido): ").strip()
             end_ts = input("end_ts (ms UTC, requerido): ").strip()
-            mode = (input("Modo recursos [safe|balanced|max-stable] (def balanced): ").strip() or "balanced").lower()
+            mode = (input("Modo recursos [safe|balanced|max-stable|adaptive_80] (def adaptive_80): ").strip() or "adaptive_80").lower()
             loop_seconds_raw = input("loop_seconds (vacio=desactivado): ").strip()
+            env_guard = ResourceGuardConfig.from_env()
             sweet_args = argparse.Namespace(
                 db=db_path,
                 strategy=strategy,
@@ -451,6 +498,13 @@ def _menu(db_path: str) -> None:
                 direction="maximize",
                 sampler="tpe",
                 seed=42,
+                guard_cpu_cap_pct=float(env_guard.cpu_cap_pct),
+                guard_ram_cap_pct=float(env_guard.ram_cap_pct),
+                guard_sample_sec=float(env_guard.sample_sec),
+                guard_high_windows=int(env_guard.high_watermark_windows),
+                guard_recover_windows=int(env_guard.recover_windows),
+                guard_backoff_sec=10.0,
+                coarse_wave_trials=12,
                 output_dir="reports",
             )
             _sweet_spot(sweet_args)
@@ -526,7 +580,11 @@ def main() -> None:
     p_sweet.add_argument("--slippage_bps", type=float, default=2.0)
     p_sweet.add_argument("--heikin_ashi", action="store_true")
     p_sweet.add_argument("--loop_seconds", type=int)
-    p_sweet.add_argument("--mode", default="balanced", choices=("safe", "balanced", "max-stable"))
+    p_sweet.add_argument(
+        "--mode",
+        default="adaptive_80",
+        choices=("safe", "balanced", "max-stable", "adaptive_80"),
+    )
     p_sweet.add_argument("--coarse_window_pct", type=float, default=0.25)
     p_sweet.add_argument("--coarse_trials", type=int, default=60)
     p_sweet.add_argument("--top_k", type=int, default=5)
@@ -546,6 +604,15 @@ def main() -> None:
     p_clean = sub.add_parser("cleanup", help="Marcar runs colgados como aborted y purgar eventos")
     p_clean.add_argument("--purge_events", action="store_true")
 
+    p_cache = sub.add_parser("cache", help="Gestionar cache columnar Parquet de klines")
+    p_cache.add_argument("action", choices=("materialize", "verify"))
+    p_cache.add_argument("--symbol", required=True)
+    p_cache.add_argument("--interval", required=True)
+    p_cache.add_argument("--start_ts", type=int, required=True, help="Inicio del periodo (ms UTC)")
+    p_cache.add_argument("--end_ts", type=int, required=True, help="Fin del periodo (ms UTC)")
+    p_cache.add_argument("--cache_root", default="reports/cache/parquet")
+    p_cache.add_argument("--overwrite", action="store_true")
+
     sub.add_parser("menu")
     args = parser.parse_args()
     init_db(args.db)
@@ -561,6 +628,8 @@ def main() -> None:
         _sweet_spot(args)
     elif args.cmd == "cleanup":
         _cleanup(args)
+    elif args.cmd == "cache":
+        _cache(args)
     else:
         _menu(args.db)
 
