@@ -1,4 +1,4 @@
 maturin>=1.7,<2.0
-ruff>=0.6
+ruff>=0.15.14
 mypy>=1.10
 pre-commit>=3.7
