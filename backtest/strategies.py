@@ -115,6 +115,15 @@ class DorothyBacktestStrategy(StrategyBase):
             if fill_price > 0:
                 self.active_sell_limits.append(fill_price * (1.0 + self.profit_factor))
 
+    def export_state(self) -> dict:
+        return {
+            "active_sell_limits": [float(v) for v in self.active_sell_limits if float(v) > 0.0],
+        }
+
+    def import_state(self, state: dict) -> None:
+        raw_limits = state.get("active_sell_limits", []) if isinstance(state, dict) else []
+        self.active_sell_limits = sorted([float(v) for v in raw_limits if float(v) > 0.0])
+
 
 class DorothyHubStrategy(StrategyBase):
     """Backtest adapter for Pecunator Dorothy behavior."""
@@ -193,6 +202,15 @@ class DorothyHubStrategy(StrategyBase):
             fill_price = float(fill.get("price", 0.0) or 0.0)
             if fill_price > 0:
                 self.active_sell_limits.append(fill_price * (1.0 + self.profit_factor))
+
+    def export_state(self) -> dict:
+        return {
+            "active_sell_limits": [float(v) for v in self.active_sell_limits if float(v) > 0.0],
+        }
+
+    def import_state(self, state: dict) -> None:
+        raw_limits = state.get("active_sell_limits", []) if isinstance(state, dict) else []
+        self.active_sell_limits = sorted([float(v) for v in raw_limits if float(v) > 0.0])
 
 
 class ElphabaHubStrategy(StrategyBase):

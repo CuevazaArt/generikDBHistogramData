@@ -1,4 +1,5 @@
 """Strategy registry and parameter/search-space helpers."""
+from decimal import Decimal, ROUND_FLOOR
 from typing import Any, Dict, Optional, Type
 
 from backtest.strategy_base import StrategyBase
@@ -53,7 +54,14 @@ def list_strategy_names(include_aliases: bool = False) -> list[str]:
 
 def params_from_cli(args: Any, strategy_name: str) -> Dict[str, Any]:
     key = strategy_name.strip().lower()
-    if key in ("dorothy", "dorothy_hub", "dorothy_legacy"):
+    if key in ("dorothy", "dorothy_hub"):
+        return {
+            "profit_factor": float(args.profit_factor),
+            "margin_drop_factor": float(args.margin_drop_factor),
+            "quote_order_qty_usdt": float(args.quote_order_qty_usdt),
+            "max_rungs": int(args.max_rungs) if hasattr(args, "max_rungs") else 5,
+        }
+    if key == "dorothy_legacy":
         return {
             "profit_factor": float(args.profit_factor),
             "margin_drop_factor": float(args.margin_drop_factor),
@@ -138,10 +146,81 @@ def _get_int_range(
     return lo, hi
 
 
+def _as_float_values(raw: Any) -> list[float]:
+    if isinstance(raw, str):
+        tokens = [x.strip() for x in raw.split(",")]
+        values = [float(x) for x in tokens if x]
+    elif isinstance(raw, (list, tuple)):
+        values = [float(x) for x in raw]
+    else:
+        values = [float(raw)]
+    unique = sorted({round(float(v), 12) for v in values})
+    return [float(v) for v in unique]
+
+
+def _build_float_grid(lo: float, hi: float, step: float) -> list[float]:
+    if step <= 0:
+        raise ValueError("step must be > 0")
+    d_lo = Decimal(str(lo))
+    d_hi = Decimal(str(hi))
+    if d_lo > d_hi:
+        d_lo, d_hi = d_hi, d_lo
+    d_step = Decimal(str(step))
+    span = d_hi - d_lo
+    slots = int((span / d_step).to_integral_value(rounding=ROUND_FLOOR))
+    out = [float(d_lo + d_step * i) for i in range(slots + 1)]
+    if out and out[-1] < float(d_hi):
+        out.append(float(d_hi))
+    elif not out:
+        out = [float(d_lo), float(d_hi)]
+    unique = sorted({round(float(v), 12) for v in out})
+    return [float(v) for v in unique]
+
+
+def _suggest_float_param(
+    trial: Any,
+    overrides: Dict[str, Any],
+    name: str,
+    default_min: float,
+    default_max: float,
+) -> float:
+    if name in overrides:
+        return float(overrides[name])
+    min_key = f"{name}_min"
+    max_key = f"{name}_max"
+    step_key = f"{name}_step"
+    values_key = f"{name}_values"
+    lo, hi = _get_float_range(overrides, min_key, max_key, default_min, default_max)
+    if values_key in overrides:
+        values = _as_float_values(overrides[values_key])
+        return float(trial.suggest_categorical(name, values))
+    if step_key in overrides:
+        values = _build_float_grid(lo, hi, float(overrides[step_key]))
+        return float(trial.suggest_categorical(name, values))
+    if lo == hi:
+        return float(lo)
+    return float(trial.suggest_float(name, lo, hi))
+
+
 def suggest_params(trial: Any, strategy_name: str, search_overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     key = strategy_name.strip().lower()
     overrides = search_overrides or {}
-    if key in ("dorothy", "dorothy_hub", "dorothy_legacy"):
+    if key in ("dorothy", "dorothy_hub"):
+        md_min, md_max = _get_float_range(overrides, "margin_drop_factor_min", "margin_drop_factor_max", 0.001, 0.02)
+        r_min, r_max = _get_int_range(overrides, "max_rungs_min", "max_rungs_max", 2, 10)
+        return {
+            "profit_factor": _suggest_float_param(trial, overrides, "profit_factor", 0.005, 0.08),
+            "margin_drop_factor": _suggest_float_param(
+                trial,
+                overrides,
+                "margin_drop_factor",
+                md_min,
+                md_max,
+            ),
+            "quote_order_qty_usdt": float(overrides.get("quote_order_qty_usdt", 8.0)),
+            "max_rungs": int(trial.suggest_int("max_rungs", r_min, r_max)),
+        }
+    if key == "dorothy_legacy":
         pf_min, pf_max = _get_float_range(overrides, "profit_factor_min", "profit_factor_max", 0.005, 0.08)
         md_min, md_max = _get_float_range(overrides, "margin_drop_factor_min", "margin_drop_factor_max", 0.001, 0.02)
         r_min, r_max = _get_int_range(overrides, "max_rungs_min", "max_rungs_max", 2, 10)

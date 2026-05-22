@@ -6,3 +6,4 @@ tqdm
 optuna
 matplotlib
 pytest
+psutil

@@ -12,44 +12,51 @@ def execute_and_persist(
     strategy_cls: Type[StrategyBase],
     strategy_params: Optional[Dict] = None,
     trial_id: Optional[int] = None,
+    initial_state: Optional[Dict] = None,
 ) -> BacktestResult:
     init_db(config.db_path)
     strategy_params = strategy_params or {}
+    run_cfg = EngineConfig(**config.__dict__)
+    run_cfg.initial_state = initial_state or config.initial_state
     run_id = create_run(
-        db_path=config.db_path,
+        db_path=run_cfg.db_path,
         strategy_name=strategy_cls.name,
-        symbol=config.symbol,
-        interval=config.interval,
-        start_ts=config.start_ts,
-        end_ts=config.end_ts,
-        initial_cash=config.initial_cash,
-        fee_rate=config.fee_rate,
-        slippage_bps=config.slippage_bps,
+        symbol=run_cfg.symbol,
+        interval=run_cfg.interval,
+        start_ts=run_cfg.start_ts,
+        end_ts=run_cfg.end_ts,
+        initial_cash=run_cfg.initial_cash,
+        fee_rate=run_cfg.fee_rate,
+        slippage_bps=run_cfg.slippage_bps,
         config={
-            "engine": config.__dict__,
+            "engine": run_cfg.__dict__,
             "strategy": strategy_params,
         },
     )
     try:
         result = run_backtest(
-            config=config,
+            config=run_cfg,
             strategy_cls=strategy_cls,
             strategy_params=strategy_params,
             run_id=run_id,
             trial_id=trial_id,
         )
-        persist_run_events(config.db_path, run_id=run_id, events=result.events)
+        persist_run_events(run_cfg.db_path, run_id=run_id, events=result.events)
         persist_run_metrics(
-            config.db_path,
+            run_cfg.db_path,
             run_id=run_id,
             metrics=result.metrics,
             trial_id=trial_id,
-            extra={"symbol": config.symbol, "interval": config.interval},
+            extra={
+                "symbol": run_cfg.symbol,
+                "interval": run_cfg.interval,
+                "final_state": result.final_state,
+            },
         )
-        finish_run(config.db_path, run_id=run_id, status="completed")
+        finish_run(run_cfg.db_path, run_id=run_id, status="completed")
         result.run_id = run_id
         return result
     except Exception:
-        finish_run(config.db_path, run_id=run_id, status="failed")
+        finish_run(run_cfg.db_path, run_id=run_id, status="failed")
         raise
 

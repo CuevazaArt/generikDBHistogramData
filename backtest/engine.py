@@ -1,6 +1,6 @@
 """Core backtesting engine."""
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple, Type
+from typing import Any, Dict, List, Optional, Tuple, Type
 
 from backtest.broker import SpotBroker
 from backtest.data_feed import candles_to_dicts, load_candles
@@ -9,6 +9,9 @@ from backtest.indicators import apply_indicators
 from backtest.metrics import summarize_metrics
 from backtest.strategy_base import StrategyBase, StrategyContext
 from backtest.transforms import apply_candle_source, apply_heikin_ashi
+
+
+_EVENTS_MODES = ("full", "lite", "minimal")
 
 
 @dataclass
@@ -29,6 +32,15 @@ class EngineConfig:
     rsi_period: int = 14
     atr_period: int = 14
     loop_seconds: Optional[int] = None
+    # Persistence aggressiveness:
+    #   "full"    -> emit one event per candle (legacy behaviour).
+    #   "lite"    -> emit fills, rejects and periodic equity snapshots only.
+    #   "minimal" -> emit fills and rejects only (no snapshots).
+    events_mode: str = "full"
+    # Used only in "lite" mode: minimum seconds between equity snapshots.
+    snapshot_seconds: int = 3600
+    # Optional warm-start snapshot for broker/strategy state.
+    initial_state: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -40,6 +52,7 @@ class BacktestResult:
     candles: List[Dict]
     run_id: Optional[int] = None
     trial_id: Optional[int] = None
+    final_state: Dict[str, Any] = field(default_factory=dict)
 
 
 def _add_custom_smas(candles: List[Dict], fast: int, slow: int) -> None:
@@ -91,8 +104,20 @@ def run_backtest(
         fee_rate=config.fee_rate,
         slippage_bps=config.slippage_bps,
     )
+    initial_state = config.initial_state if isinstance(config.initial_state, dict) else None
+    broker_seed = initial_state.get("broker", {}) if initial_state else {}
+    if isinstance(broker_seed, dict):
+        broker.state.cash = float(broker_seed.get("cash", broker.state.cash))
+        broker.state.position_qty = max(0.0, float(broker_seed.get("position_qty", broker.state.position_qty)))
+        broker.state.avg_entry = max(0.0, float(broker_seed.get("avg_entry", broker.state.avg_entry)))
+        if broker.state.position_qty <= 0:
+            broker.state.avg_entry = 0.0
+
     strategy = strategy_cls(**strategy_params)
     strategy.on_start(candles)
+    strategy_seed = initial_state.get("strategy", {}) if initial_state else {}
+    if isinstance(strategy_seed, dict):
+        strategy.import_state(strategy_seed)
 
     events: List[Dict] = []
     equity_curve: List[float] = []
@@ -100,6 +125,14 @@ def run_backtest(
     seq = 0
     last_trade_entry: Optional[Tuple[float, float]] = None
     last_exec_ts: Optional[int] = None
+
+    events_mode = (config.events_mode or "full").strip().lower()
+    if events_mode not in _EVENTS_MODES:
+        events_mode = "full"
+    emit_holds = events_mode == "full"
+    emit_snapshots = events_mode == "lite"
+    snapshot_step_ms = max(1, int(config.snapshot_seconds)) * 1000
+    last_snapshot_ts: Optional[int] = None
 
     for i, candle in enumerate(candles):
         candle_ts = int(candle["open_time"])
@@ -161,19 +194,37 @@ def run_backtest(
                 )
                 events.append(event.to_record())
         else:
-            seq += 1
-            events.append(
-                Event(
-                    seq=seq,
-                    event_time=candle_ts,
-                    event_type="hold",
-                    cash=float(broker.state.cash),
-                    equity=float(equity),
-                    position_qty=float(broker.state.position_qty),
-                    payload={},
-                    trial_id=trial_id,
-                ).to_record()
-            )
+            if emit_holds:
+                seq += 1
+                events.append(
+                    Event(
+                        seq=seq,
+                        event_time=candle_ts,
+                        event_type="hold",
+                        cash=float(broker.state.cash),
+                        equity=float(equity),
+                        position_qty=float(broker.state.position_qty),
+                        payload={},
+                        trial_id=trial_id,
+                    ).to_record()
+                )
+            elif emit_snapshots and (
+                last_snapshot_ts is None or (candle_ts - last_snapshot_ts) >= snapshot_step_ms
+            ):
+                seq += 1
+                events.append(
+                    Event(
+                        seq=seq,
+                        event_time=candle_ts,
+                        event_type="snapshot",
+                        cash=float(broker.state.cash),
+                        equity=float(equity),
+                        position_qty=float(broker.state.position_qty),
+                        payload={},
+                        trial_id=trial_id,
+                    ).to_record()
+                )
+                last_snapshot_ts = candle_ts
 
     strategy.on_finish()
     final_px = float(candles[-1]["price_source"]) if candles else config.initial_cash
@@ -184,6 +235,16 @@ def run_backtest(
         equity_curve=equity_curve,
         trade_pnls=trade_pnls,
     )
+    final_state = {
+        "broker": {
+            "cash": float(broker.state.cash),
+            "position_qty": float(broker.state.position_qty),
+            "avg_entry": float(broker.state.avg_entry),
+        },
+        "strategy": strategy.export_state(),
+        "last_price": float(final_px if candles else 0.0),
+        "final_equity": float(final_equity),
+    }
     return BacktestResult(
         config=config,
         metrics=metrics,
@@ -192,5 +253,6 @@ def run_backtest(
         candles=candles,
         run_id=run_id,
         trial_id=trial_id,
+        final_state=final_state,
     )
 
