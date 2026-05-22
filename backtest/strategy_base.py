@@ -41,3 +41,11 @@ class StrategyBase:
     def on_finish(self) -> None:
         return None
 
+    def export_state(self) -> Dict[str, Any]:
+        """Serialize strategy-internal state for warm restarts."""
+        return {}
+
+    def import_state(self, state: Dict[str, Any]) -> None:
+        """Restore strategy-internal state from a previous run."""
+        _ = state
+

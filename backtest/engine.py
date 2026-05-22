@@ -1,6 +1,6 @@
 """Core backtesting engine."""
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple, Type
+from typing import Any, Dict, List, Optional, Tuple, Type
 
 from backtest.broker import SpotBroker
 from backtest.data_feed import candles_to_dicts, load_candles
@@ -39,6 +39,8 @@ class EngineConfig:
     events_mode: str = "full"
     # Used only in "lite" mode: minimum seconds between equity snapshots.
     snapshot_seconds: int = 3600
+    # Optional warm-start snapshot for broker/strategy state.
+    initial_state: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -50,6 +52,7 @@ class BacktestResult:
     candles: List[Dict]
     run_id: Optional[int] = None
     trial_id: Optional[int] = None
+    final_state: Dict[str, Any] = field(default_factory=dict)
 
 
 def _add_custom_smas(candles: List[Dict], fast: int, slow: int) -> None:
@@ -101,8 +104,20 @@ def run_backtest(
         fee_rate=config.fee_rate,
         slippage_bps=config.slippage_bps,
     )
+    initial_state = config.initial_state if isinstance(config.initial_state, dict) else None
+    broker_seed = initial_state.get("broker", {}) if initial_state else {}
+    if isinstance(broker_seed, dict):
+        broker.state.cash = float(broker_seed.get("cash", broker.state.cash))
+        broker.state.position_qty = max(0.0, float(broker_seed.get("position_qty", broker.state.position_qty)))
+        broker.state.avg_entry = max(0.0, float(broker_seed.get("avg_entry", broker.state.avg_entry)))
+        if broker.state.position_qty <= 0:
+            broker.state.avg_entry = 0.0
+
     strategy = strategy_cls(**strategy_params)
     strategy.on_start(candles)
+    strategy_seed = initial_state.get("strategy", {}) if initial_state else {}
+    if isinstance(strategy_seed, dict):
+        strategy.import_state(strategy_seed)
 
     events: List[Dict] = []
     equity_curve: List[float] = []
@@ -220,6 +235,16 @@ def run_backtest(
         equity_curve=equity_curve,
         trade_pnls=trade_pnls,
     )
+    final_state = {
+        "broker": {
+            "cash": float(broker.state.cash),
+            "position_qty": float(broker.state.position_qty),
+            "avg_entry": float(broker.state.avg_entry),
+        },
+        "strategy": strategy.export_state(),
+        "last_price": float(final_px if candles else 0.0),
+        "final_equity": float(final_equity),
+    }
     return BacktestResult(
         config=config,
         metrics=metrics,
@@ -228,5 +253,6 @@ def run_backtest(
         candles=candles,
         run_id=run_id,
         trial_id=trial_id,
+        final_state=final_state,
     )
 

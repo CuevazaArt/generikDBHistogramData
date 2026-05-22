@@ -26,6 +26,7 @@ from backtest.plots import (
     plot_monthly_return_spectrum,
     plot_signal_histograms,
 )
+from backtest.report_paths import study_report_dir, write_manifest
 from backtest.storage import (
     run_descriptor,
     run_equity_curve,
@@ -225,8 +226,13 @@ def build_unified_report(
     best = sweet_result.best_focused_run
     run_id = int(best["run_id"])
     ensure_dir(output_dir)
-    report_dir = os.path.join(output_dir, "sweet_spot", f"{sweet_result.focused_study_name}")
+    report_dir = study_report_dir(output_dir, sweet_result.focused_study_name)
     ensure_dir(report_dir)
+    write_manifest(
+        report_dir,
+        title=f"Sweet-spot study {sweet_result.focused_study_name}",
+        summary="Unified report and artifacts for sweet-spot best focused run.",
+    )
 
     # Pull persisted data for the winning run.
     eq_rows = run_equity_curve(db_path, run_id=run_id)

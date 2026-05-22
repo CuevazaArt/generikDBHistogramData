@@ -13,10 +13,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import time
 from typing import Any, Callable, Dict, List, Optional, Tuple, Type
 
 from backtest.cleanup import abort_stale_runs
 from backtest.engine import EngineConfig
+from backtest.guards import ResourceGuard, ResourceGuardConfig
 from backtest.optimize import OptimizationConfig, optimize_strategy
 from backtest.registry import get_strategy
 from backtest.resources import recommend_n_jobs
@@ -56,6 +58,15 @@ class SweetSpotConfig:
     # events on 1s datasets. Use "full" only on small datasets.
     focused_events_mode: str = "lite"
     focused_snapshot_seconds: int = 3600
+    # Runtime guard defaults.
+    guard_cpu_cap_pct: float = 90.0
+    guard_ram_cap_pct: float = 90.0
+    guard_sample_sec: float = 5.0
+    guard_high_watermark_windows: int = 3
+    guard_recover_windows: int = 3
+    guard_backoff_sec: float = 10.0
+    # Chunk coarse optimization into waves for adaptive n_jobs.
+    coarse_wave_trials: int = 12
 
 
 @dataclass
@@ -111,30 +122,64 @@ def run_sweet_spot_search(
 
     abort_stale_runs(cfg.db_path)
     strategy_cls: Type[StrategyBase] = get_strategy(cfg.strategy_name)
+    guard = ResourceGuard(
+        ResourceGuardConfig(
+            cpu_cap_pct=float(cfg.guard_cpu_cap_pct),
+            ram_cap_pct=float(cfg.guard_ram_cap_pct),
+            sample_sec=float(cfg.guard_sample_sec),
+            high_watermark_windows=int(cfg.guard_high_watermark_windows),
+            recover_windows=int(cfg.guard_recover_windows),
+        )
+    )
 
     # ----- Phase 1: coarse search -----
     coarse_start, coarse_end = _coarse_window(cfg.full_start_ts, cfg.full_end_ts, cfg.coarse_window_pct)
     coarse_engine = _build_engine_config(cfg, coarse_start, coarse_end, events_mode="lite", snapshot_seconds=cfg.focused_snapshot_seconds)
-    coarse_jobs = recommend_n_jobs(cfg.coarse_mode)
+    coarse_jobs = max(1, recommend_n_jobs(cfg.coarse_mode))
+    # Ramp workers progressively across waves instead of starting at peak.
+    dynamic_jobs = 1
     coarse_study_name = f"sweet_{cfg.strategy_name}_{cfg.symbol}_{cfg.interval}_coarse_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
-    _log(f"[phase1] coarse window {coarse_start}->{coarse_end} | trials={cfg.coarse_trials} | n_jobs={coarse_jobs} | study={coarse_study_name}")
-    optimize_strategy(
-        db_path=cfg.db_path,
-        study_name=coarse_study_name,
-        strategy_cls=strategy_cls,
-        base_config=coarse_engine,
-        trials=cfg.coarse_trials,
-        n_jobs=coarse_jobs,
-        timeout=cfg.coarse_timeout,
-        search_overrides=cfg.coarse_search_overrides or None,
-        optimization=OptimizationConfig(
-            objective_metric=cfg.coarse_objective_metric,
-            direction=cfg.coarse_direction,
-            sampler=cfg.coarse_sampler,
-            seed=cfg.coarse_seed,
-        ),
-        events_mode="lite",
+    _log(
+        f"[phase1] coarse window {coarse_start}->{coarse_end} | "
+        f"trials={cfg.coarse_trials} | n_jobs_base={coarse_jobs} | study={coarse_study_name}"
     )
+    remaining_trials = int(cfg.coarse_trials)
+    wave = 0
+    while remaining_trials > 0:
+        wave += 1
+        snap = guard.snapshot()
+        dynamic_jobs = min(coarse_jobs, max(1, guard.suggest_concurrency(dynamic_jobs, min=1)))
+        if snap.get("throttle_active"):
+            dynamic_jobs = max(1, min(dynamic_jobs, coarse_jobs // 2 or 1))
+            _log(
+                "[guard] throttle active "
+                f"(cpu={snap.get('cpu_pct')} ram={snap.get('ram_pct')}) -> "
+                f"n_jobs={dynamic_jobs}, backoff={cfg.guard_backoff_sec}s"
+            )
+            time.sleep(max(1.0, float(cfg.guard_backoff_sec)))
+        for event in guard.consume_events():
+            _log(f"[guard-event] {event.get('event')} | snapshot={event.get('snapshot')}")
+
+        wave_trials = min(remaining_trials, max(1, int(cfg.coarse_wave_trials)))
+        _log(f"[phase1-wave] wave={wave} trials={wave_trials} n_jobs={dynamic_jobs}")
+        optimize_strategy(
+            db_path=cfg.db_path,
+            study_name=coarse_study_name,
+            strategy_cls=strategy_cls,
+            base_config=coarse_engine,
+            trials=wave_trials,
+            n_jobs=dynamic_jobs,
+            timeout=cfg.coarse_timeout,
+            search_overrides=cfg.coarse_search_overrides or None,
+            optimization=OptimizationConfig(
+                objective_metric=cfg.coarse_objective_metric,
+                direction=cfg.coarse_direction,
+                sampler=cfg.coarse_sampler,
+                seed=cfg.coarse_seed,
+            ),
+            events_mode="lite",
+        )
+        remaining_trials -= wave_trials
 
     # ----- Phase 2: focused validation on top-K -----
     rows = study_trials(cfg.db_path, study_name=coarse_study_name, limit=2000)
@@ -227,5 +272,13 @@ def run_sweet_spot_search(
             "coarse_mode": cfg.coarse_mode,
             "focused_mode": cfg.focused_mode,
             "objective_metric": cfg.coarse_objective_metric,
+            "resource_guard": {
+                "cpu_cap_pct": cfg.guard_cpu_cap_pct,
+                "ram_cap_pct": cfg.guard_ram_cap_pct,
+                "sample_sec": cfg.guard_sample_sec,
+                "high_watermark_windows": cfg.guard_high_watermark_windows,
+                "recover_windows": cfg.guard_recover_windows,
+                "backoff_sec": cfg.guard_backoff_sec,
+            },
         },
     )
