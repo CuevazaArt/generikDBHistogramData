@@ -1,4 +1,5 @@
 """Built-in example strategies."""
+from backtest.exchange_filters import normalize_spot_buy_notional
 from backtest.pecunator_trend import annotate_pecunator_gates
 from backtest.strategy_base import Signal, StrategyBase, StrategyContext
 
@@ -136,6 +137,10 @@ class DorothyHubStrategy(StrategyBase):
         margin_drop_factor: float = 0.03,
         quote_order_qty_usdt: float = 8.0,
         max_rungs: int = 5,
+        volumen_incremental: bool = False,
+        volumen_incremental_multiplier: float = 1.05,
+        initial_run_cash: float | None = None,
+        symbol: str = "XRPUSDT",
         **params,
     ):
         super().__init__(
@@ -143,6 +148,10 @@ class DorothyHubStrategy(StrategyBase):
             margin_drop_factor=margin_drop_factor,
             quote_order_qty_usdt=quote_order_qty_usdt,
             max_rungs=max_rungs,
+            volumen_incremental=volumen_incremental,
+            volumen_incremental_multiplier=volumen_incremental_multiplier,
+            initial_run_cash=initial_run_cash,
+            symbol=symbol,
             **params,
         )
         self.profit_factor = max(0.0, float(profit_factor))
@@ -150,7 +159,41 @@ class DorothyHubStrategy(StrategyBase):
         self.quote_order_qty_usdt = max(1.0, float(quote_order_qty_usdt))
         # max_rungs <= 0 disables the cap (unlimited DCA rungs for spot backtests).
         self.max_rungs = int(max_rungs)
+        self.volumen_incremental = bool(volumen_incremental)
+        self.volumen_incremental_multiplier = max(1.0, float(volumen_incremental_multiplier))
+        self.initial_run_cash = (
+            float(initial_run_cash) if initial_run_cash is not None and float(initial_run_cash) > 0 else None
+        )
+        self.symbol = str(symbol or "XRPUSDT").upper()
         self.active_sell_limits: list[float] = []
+
+    def _quote_notional_for_buy(self, ctx: StrategyContext) -> float:
+        """Base quote size with optional VolumenIncremental (experimental)."""
+        notional = float(self.quote_order_qty_usdt)
+        if self.volumen_incremental and self.initial_run_cash is not None:
+            available = float(ctx.cash)
+            if available > float(self.initial_run_cash) + 1e-9:
+                notional *= self.volumen_incremental_multiplier
+        price = float(ctx.candle.get("price_source", ctx.candle.get("close", 0.0)))
+        adj_notional, _qty = normalize_spot_buy_notional(self.symbol, notional, price)
+        return max(0.0, adj_notional)
+
+    def _buy_signal(
+        self,
+        ctx: StrategyContext,
+        reason: str,
+        metadata: dict | None = None,
+    ) -> Signal:
+        notional = self._quote_notional_for_buy(ctx)
+        if notional <= 0 or ctx.cash < notional:
+            return Signal(action="hold", reason="insufficient_cash")
+        size_pct = max(0.01, min(1.0, notional / max(ctx.cash, 1e-9)))
+        meta = dict(metadata or {})
+        if self.volumen_incremental:
+            meta["volumen_incremental"] = True
+            meta["quote_notional_usdt"] = notional
+            meta["initial_run_cash"] = self.initial_run_cash
+        return Signal(action="buy", size_pct=size_pct, reason=reason, metadata=meta)
 
     def on_start(self, candles):
         annotate_pecunator_gates(candles, price_key="price_source")
@@ -178,20 +221,15 @@ class DorothyHubStrategy(StrategyBase):
 
         if self.max_rungs > 0 and len(self.active_sell_limits) >= self.max_rungs:
             return Signal(action="hold", reason="max_rungs_reached")
-        if ctx.cash < self.quote_order_qty_usdt:
-            return Signal(action="hold", reason="insufficient_cash")
 
         if not self.active_sell_limits:
-            size_pct = max(0.01, min(1.0, self.quote_order_qty_usdt / max(ctx.cash, 1e-9)))
-            return Signal(action="buy", size_pct=size_pct, reason="initial_reference_buy")
+            return self._buy_signal(ctx, reason="initial_reference_buy")
 
         anchor = min(self.active_sell_limits)
         drop_trigger = anchor * (1.0 - (self.profit_factor + self.margin_drop_factor))
         if price <= drop_trigger:
-            size_pct = max(0.01, min(1.0, self.quote_order_qty_usdt / max(ctx.cash, 1e-9)))
-            return Signal(
-                action="buy",
-                size_pct=size_pct,
+            return self._buy_signal(
+                ctx,
                 reason="dca_drop_below_anchor",
                 metadata={"anchor_limit": anchor, "drop_trigger": drop_trigger},
             )
@@ -207,11 +245,14 @@ class DorothyHubStrategy(StrategyBase):
     def export_state(self) -> dict:
         return {
             "active_sell_limits": [float(v) for v in self.active_sell_limits if float(v) > 0.0],
+            "initial_run_cash": self.initial_run_cash,
         }
 
     def import_state(self, state: dict) -> None:
         raw_limits = state.get("active_sell_limits", []) if isinstance(state, dict) else []
         self.active_sell_limits = sorted([float(v) for v in raw_limits if float(v) > 0.0])
+        if isinstance(state, dict) and state.get("initial_run_cash") is not None:
+            self.initial_run_cash = float(state["initial_run_cash"])
 
 
 class ElphabaHubStrategy(StrategyBase):

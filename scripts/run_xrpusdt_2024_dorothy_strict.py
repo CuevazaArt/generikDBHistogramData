@@ -68,6 +68,23 @@ def _param_combos(profit_values: List[float], margin_values: List[float]) -> Lis
     return combos
 
 
+def _enrich_strategy_params(
+    combo: Dict[str, float],
+    args: argparse.Namespace,
+    quote_order_qty: float,
+    max_rungs: int,
+) -> Dict[str, Any]:
+    return {
+        **combo,
+        "quote_order_qty_usdt": float(quote_order_qty),
+        "max_rungs": int(max_rungs),
+        "symbol": str(args.symbol).upper(),
+        "initial_run_cash": float(args.initial_cash),
+        "volumen_incremental": bool(getattr(args, "volumen_incremental", False)),
+        "volumen_incremental_multiplier": float(getattr(args, "volumen_incremental_multiplier", 1.05)),
+    }
+
+
 def _configure_compute_threads(cpu_cap_pct: float) -> int:
     """Let numpy/OpenBLAS use multiple cores during indicator passes."""
     n = os.cpu_count() or 4
@@ -503,7 +520,7 @@ def run(args: argparse.Namespace) -> None:
                 "project_root": project_root,
                 "args_ns": args_ns,
                 "execution_windows": execution_windows,
-                "strategy_params": combo,
+                "strategy_params": _enrich_strategy_params(combo, args, quote_order_qty, max_rungs),
                 "quote_order_qty_usdt": quote_order_qty,
                 "max_rungs": max_rungs,
                 "chain_seed": chain_seed,
@@ -545,11 +562,7 @@ def run(args: argparse.Namespace) -> None:
             flush=True,
         )
         for combo in param_combos:
-            params = {
-                **combo,
-                "quote_order_qty_usdt": float(quote_order_qty),
-                "max_rungs": int(max_rungs),
-            }
+            params = _enrich_strategy_params(combo, args, quote_order_qty, max_rungs)
             label = f"pf={combo['profit_factor']}_mdf={combo['margin_drop_factor']}"
             telemetry.sample(phase=f"{label}:start")
             candidates.append(
@@ -683,6 +696,17 @@ def main() -> None:
         type=int,
         default=None,
         help="Tope de rungs DCA; 0 o negativo = sin limite. Omitir usa min(200, cash/8).",
+    )
+    parser.add_argument(
+        "--volumen-incremental",
+        action="store_true",
+        help="Activa accesorio VolumenIncremental (x1.05 notional si cash > capital inicial de corrida).",
+    )
+    parser.add_argument(
+        "--volumen-incremental-multiplier",
+        type=float,
+        default=1.05,
+        help="Multiplicador cuando cash disponible supera initial_cash de la corrida.",
     )
     run(parser.parse_args())
 

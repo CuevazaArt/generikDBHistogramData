@@ -99,6 +99,14 @@ Informes bajo `reports/entregables/strict/` (prefijo
    - Los rangos citados para **1h** (`0.04–0.06` / `0.005–0.015`) **no trasladan**
      directo a 1s; hace falta re-optimizar o walk-forward en 1s.
 
+### VolumenIncremental (experimental, 2026-05-22)
+
+Accesorio opcional en `DorothyHubStrategy`: si `cash` disponible para compra es **mayor**
+que `initial_run_cash` de la corrida, la siguiente orden usa
+`quote_order_qty_usdt * 1.05`; si no, notional base ×1. El notional se ajusta con
+filtros spot (`backtest/exchange_filters.py`, LOT_SIZE / MIN_NOTIONAL, redondeo **arriba**
+al paso de cantidad). CLI strict: `--volumen-incremental`.
+
 ### Pendientes / no concluido aquí
 
 - Comparar contra **buy & hold** XRP 2024 en la misma ventana.
