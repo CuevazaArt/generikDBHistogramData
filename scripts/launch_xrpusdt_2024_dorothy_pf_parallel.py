@@ -1,27 +1,26 @@
+"""Launch isolated quarterly strict runs per profit_factor.
+
+Thin wrapper around `backtest.scheduler.run_branches` so the heavy lifting
+(adaptive concurrency, guard hysteresis, JSONL master log) lives in shared
+code reusable by other orchestrators.
+"""
 from __future__ import annotations
 
 import argparse
-import json
-import math
 import os
 import shutil
-import subprocess
 import sys
-import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import List
 
-from backtest.guards import ResourceGuard, ResourceGuardConfig
+from backtest.guards import ResourceGuardConfig
 from backtest.report_paths import strict_report_dir, write_manifest
+from backtest.scheduler import BranchSpec, SchedulerConfig, run_branches
 
 
 def _now_tag() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _parse_profit_factors(raw: str) -> List[float]:
@@ -37,65 +36,7 @@ def _pf_slug(pf: float) -> str:
     return f"pf_{txt}"
 
 
-def _append_jsonl(path: Path, payload: Dict[str, Any]) -> None:
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
-
-
-def _write_master_markdown(path: Path, payload: Dict[str, Any]) -> None:
-    lines = [
-        "# Master launch log - XRPUSDT 2024 strict quarterly branches",
-        "",
-        "## Resource plan",
-        f"- cpu_count: `{payload['cpu_count']}`",
-        f"- cpu_cap_pct: `{payload['cpu_cap_pct']}`",
-        f"- cpu_branch_budget: `{payload['cpu_branch_budget']}`",
-        f"- max_concurrent_active: `{payload['max_concurrent_active']}`",
-        f"- guard_cpu_cap_pct: `{payload['guard']['cpu_cap_pct']}`",
-        f"- guard_ram_cap_pct: `{payload['guard']['ram_cap_pct']}`",
-        f"- guard_sample_sec: `{payload['guard']['sample_sec']}`",
-        f"- total_branches: `{payload['total_branches']}`",
-        "",
-        "## Run root",
-        f"- run_root: `{payload['run_root']}`",
-        f"- master_log_jsonl: `{payload['master_log_jsonl']}`",
-        "",
-        "## Branch map",
-    ]
-    for b in payload["branches"]:
-        lines.extend(
-            [
-                f"### {b['branch']}",
-                f"- profit_factor: `{b['profit_factor']}`",
-                f"- db_path: `{b['db_path']}`",
-                f"- output_root: `{b['output_root']}`",
-                f"- process_log: `{b['process_log']}`",
-                "",
-            ]
-        )
-    path.write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
-
-
-def _guard_from_args(args: argparse.Namespace) -> ResourceGuard:
-    env_cfg = ResourceGuardConfig.from_env()
-    cfg = ResourceGuardConfig(
-        cpu_cap_pct=float(args.guard_cpu_cap_pct if args.guard_cpu_cap_pct is not None else env_cfg.cpu_cap_pct),
-        ram_cap_pct=float(args.guard_ram_cap_pct if args.guard_ram_cap_pct is not None else env_cfg.ram_cap_pct),
-        sample_sec=float(args.guard_sample_sec if args.guard_sample_sec is not None else env_cfg.sample_sec),
-        high_watermark_windows=int(
-            args.guard_high_windows if args.guard_high_windows is not None else env_cfg.high_watermark_windows
-        ),
-        recover_windows=int(args.guard_recover_windows if args.guard_recover_windows is not None else env_cfg.recover_windows),
-    )
-    return ResourceGuard(cfg)
-
-
-def _build_branches(
-    args: argparse.Namespace,
-    run_root: Path,
-    profit_factors: List[float],
-    guard: ResourceGuard,
-) -> List[Dict[str, Any]]:
+def _build_branches(args: argparse.Namespace, run_root: Path, profit_factors: List[float]) -> List[BranchSpec]:
     db_dir = run_root / "db"
     logs_dir = run_root / "logs"
     branches_dir = run_root / "branches"
@@ -103,7 +44,7 @@ def _build_branches(
     logs_dir.mkdir(parents=True, exist_ok=True)
     branches_dir.mkdir(parents=True, exist_ok=True)
 
-    branches: List[Dict[str, Any]] = []
+    branches: List[BranchSpec] = []
     for pf in profit_factors:
         slug = _pf_slug(pf)
         db_copy = db_dir / f"klines_{slug}.db"
@@ -139,29 +80,31 @@ def _build_branches(
             "--cpu_cap_pct",
             str(args.cpu_cap_pct),
             "--guard_cpu_cap_pct",
-            str(guard.config.cpu_cap_pct),
+            str(args.guard_cpu_cap_pct),
             "--guard_ram_cap_pct",
-            str(guard.config.ram_cap_pct),
+            str(args.guard_ram_cap_pct),
             "--guard_sample_sec",
-            str(guard.config.sample_sec),
+            str(args.guard_sample_sec),
             "--guard_high_windows",
-            str(guard.config.high_watermark_windows),
+            str(args.guard_high_windows),
             "--guard_recover_windows",
-            str(guard.config.recover_windows),
+            str(args.guard_recover_windows),
             "--guard_backoff_sec",
             str(args.guard_backoff_sec),
             "--output_root",
             str(output_root),
         ]
         branches.append(
-            {
-                "branch": slug,
-                "profit_factor": pf,
-                "db_path": str(db_copy),
-                "output_root": str(output_root),
-                "process_log": str(process_log),
-                "command": cmd,
-            }
+            BranchSpec(
+                name=slug,
+                command=cmd,
+                log_path=str(process_log),
+                metadata={
+                    "profit_factor": pf,
+                    "db_path": str(db_copy),
+                    "output_root": str(output_root),
+                },
+            )
         )
     return branches
 
@@ -180,148 +123,38 @@ def run(args: argparse.Namespace) -> None:
     )
 
     profit_factors = _parse_profit_factors(args.profit_factors)
-    cpu_count = os.cpu_count() or 1
-    cpu_branch_budget = max(1, math.floor(cpu_count * (float(args.cpu_cap_pct) / 100.0)))
-    max_concurrent = max(1, min(len(profit_factors), cpu_branch_budget))
-    guard = _guard_from_args(args)
-    # Start conservatively and scale up as guard samples stay healthy.
-    dynamic_concurrent = 1
+    branches = _build_branches(args, run_root, profit_factors)
+    master_log = run_root / "MASTER_LAUNCH_LOG.jsonl"
 
-    branches = _build_branches(args, run_root, profit_factors, guard=guard)
-    master_log_jsonl = run_root / "MASTER_LAUNCH_LOG.jsonl"
-    master_log_md = run_root / "MASTER_LAUNCH_LOG.md"
-    plan_payload = {
-        "timestamp": _now_iso(),
-        "run_root": str(run_root),
-        "cpu_count": cpu_count,
-        "cpu_cap_pct": float(args.cpu_cap_pct),
-        "cpu_branch_budget": cpu_branch_budget,
-        "max_concurrent_active": max_concurrent,
-        "total_branches": len(branches),
-        "master_log_jsonl": str(master_log_jsonl),
-        "guard": {
-            "cpu_cap_pct": guard.config.cpu_cap_pct,
-            "ram_cap_pct": guard.config.ram_cap_pct,
-            "sample_sec": guard.config.sample_sec,
-            "high_watermark_windows": guard.config.high_watermark_windows,
-            "recover_windows": guard.config.recover_windows,
-        },
-        "branches": branches,
-    }
-    _append_jsonl(master_log_jsonl, {"event": "plan", **plan_payload})
-    _write_master_markdown(master_log_md, plan_payload)
-    print(json.dumps({"event": "plan", **plan_payload}, ensure_ascii=False), flush=True)
+    extra_env = {"PYTHONPATH": "." + os.pathsep + os.environ.get("PYTHONPATH", "")}
+    sched_cfg = SchedulerConfig(
+        repo_root=str(repo_root),
+        master_log_jsonl=str(master_log),
+        cpu_cap_pct=float(args.cpu_cap_pct),
+        ram_cap_pct=float(args.guard_ram_cap_pct),
+        guard_sample_sec=float(args.guard_sample_sec),
+        guard_high_windows=int(args.guard_high_windows),
+        guard_recover_windows=int(args.guard_recover_windows),
+        guard_backoff_sec=float(args.guard_backoff_sec),
+        poll_seconds=float(args.poll_seconds),
+        initial_concurrency=1,
+        extra_env=extra_env,
+    )
 
-    pending = list(branches)
-    active: List[Dict[str, Any]] = []
-    env = os.environ.copy()
-    py_path = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = "." if not py_path else f".{os.pathsep}{py_path}"
-
-    while pending or active:
-        guard_snapshot = guard.snapshot()
-        dynamic_concurrent = min(max_concurrent, max(1, guard.suggest_concurrency(dynamic_concurrent, min=1)))
-        if guard_snapshot.get("throttle_active"):
-            dynamic_concurrent = max(1, min(dynamic_concurrent, max_concurrent // 2 or 1))
-        for event in guard.consume_events():
-            _append_jsonl(
-                master_log_jsonl,
-                {
-                    **event,
-                    "dynamic_concurrent": int(dynamic_concurrent),
-                    "active_count": len(active),
-                    "pending_count": len(pending),
-                },
-            )
-
-        while pending and len(active) < dynamic_concurrent:
-            branch = pending.pop(0)
-            log_handle = open(branch["process_log"], "a", encoding="utf-8")
-            proc = subprocess.Popen(
-                branch["command"],
-                cwd=str(repo_root),
-                env=env,
-                stdout=log_handle,
-                stderr=subprocess.STDOUT,
-                text=True,
-            )
-            started_payload = {
-                "event": "started",
-                "timestamp": _now_iso(),
-                "pid": int(proc.pid),
-                "branch": branch["branch"],
-                "profit_factor": branch["profit_factor"],
-                "db_path": branch["db_path"],
-                "output_root": branch["output_root"],
-                "process_log": branch["process_log"],
-                "status": "started",
-                "command": branch["command"],
-            }
-            _append_jsonl(master_log_jsonl, started_payload)
-            print(json.dumps(started_payload, ensure_ascii=False), flush=True)
-            active.append({"branch": branch, "proc": proc, "log_handle": log_handle, "started_at": time.time()})
-
-        if not active:
-            if guard_snapshot.get("throttle_active"):
-                backoff = max(1.0, float(args.guard_backoff_sec))
-                _append_jsonl(
-                    master_log_jsonl,
-                    {
-                        "event": "resource_guard_backoff",
-                        "timestamp": _now_iso(),
-                        "seconds": backoff,
-                        "dynamic_concurrent": int(dynamic_concurrent),
-                        "pending_count": len(pending),
-                        "snapshot": guard_snapshot,
-                    },
-                )
-                time.sleep(backoff)
-            continue
-
-        time.sleep(max(1, int(args.poll_seconds)))
-        survivors: List[Dict[str, Any]] = []
-        for item in active:
-            proc = item["proc"]
-            branch = item["branch"]
-            code = proc.poll()
-            if code is None:
-                survivors.append(item)
-                continue
-            item["log_handle"].close()
-            _append_jsonl(
-                master_log_jsonl,
-                {
-                    "event": "finished",
-                    "timestamp": _now_iso(),
-                    "pid": int(proc.pid),
-                    "branch": branch["branch"],
-                    "profit_factor": branch["profit_factor"],
-                    "status": "finished",
-                    "exit_code": int(code),
-                    "db_path": branch["db_path"],
-                    "output_root": branch["output_root"],
-                    "process_log": branch["process_log"],
-                },
-            )
-            print(
-                json.dumps(
-                    {
-                        "event": "finished",
-                        "timestamp": _now_iso(),
-                        "pid": int(proc.pid),
-                        "branch": branch["branch"],
-                        "profit_factor": branch["profit_factor"],
-                        "status": "finished",
-                        "exit_code": int(code),
-                    },
-                    ensure_ascii=False,
-                ),
-                flush=True,
-            )
-        active = survivors
+    results = run_branches(sched_cfg, branches)
+    failed = [r for r in results if int(r.get("exit_code", 0)) != 0]
+    print(
+        {
+            "run_root": str(run_root),
+            "master_log": str(master_log),
+            "total_branches": len(branches),
+            "failed_branches": [r["branch"] for r in failed],
+        }
+    )
 
 
 def main() -> None:
+    env_guard = ResourceGuardConfig.from_env()
     parser = argparse.ArgumentParser(description="Launch isolated quarterly strict runs per profit_factor")
     parser.add_argument("--repo_root", default=".")
     parser.add_argument("--base_db", default="klines.db")
@@ -335,12 +168,12 @@ def main() -> None:
     parser.add_argument("--loop_seconds", type=int, default=29)
     parser.add_argument("--margin_drop_factor", type=float, default=0.0005)
     parser.add_argument("--profit_factors", default="0.01,0.03,0.05,0.06")
-    parser.add_argument("--cpu_cap_pct", type=float, default=90.0)
-    parser.add_argument("--guard_cpu_cap_pct", type=float, default=None)
-    parser.add_argument("--guard_ram_cap_pct", type=float, default=None)
-    parser.add_argument("--guard_sample_sec", type=float, default=None)
-    parser.add_argument("--guard_high_windows", type=int, default=None)
-    parser.add_argument("--guard_recover_windows", type=int, default=None)
+    parser.add_argument("--cpu_cap_pct", type=float, default=float(env_guard.cpu_cap_pct))
+    parser.add_argument("--guard_cpu_cap_pct", type=float, default=float(env_guard.cpu_cap_pct))
+    parser.add_argument("--guard_ram_cap_pct", type=float, default=float(env_guard.ram_cap_pct))
+    parser.add_argument("--guard_sample_sec", type=float, default=float(env_guard.sample_sec))
+    parser.add_argument("--guard_high_windows", type=int, default=int(env_guard.high_watermark_windows))
+    parser.add_argument("--guard_recover_windows", type=int, default=int(env_guard.recover_windows))
     parser.add_argument("--guard_backoff_sec", type=float, default=10.0)
     parser.add_argument("--output_root", default="reports")
     parser.add_argument("--poll_seconds", type=int, default=5)

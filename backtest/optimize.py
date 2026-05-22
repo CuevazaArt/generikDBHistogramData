@@ -102,16 +102,25 @@ def optimize_strategy(
     search_overrides: Optional[Dict[str, Any]] = None,
     optimization: Optional[OptimizationConfig] = None,
     events_mode: Optional[str] = None,
+    optuna_storage_db: Optional[str] = None,
 ) -> Any:
+    """Run Optuna optimization with optional storage segregation.
+
+    When `optuna_storage_db` is provided, the Optuna RDB storage is kept in a
+    separate SQLite file (e.g. `runs/strict_x/optuna.db`) so write contention
+    with our `bt_events`/`bt_runs` tables on `db_path` is eliminated.
+    Defaults to legacy behaviour (Optuna stored on `db_path`).
+    """
     if optuna is None:
         raise RuntimeError("Optuna is not installed. Run: pip install -r requirements.txt")
     init_db(db_path)
     abort_stale_runs(db_path)
     opt = optimization or OptimizationConfig()
     sampler = _build_sampler(opt.sampler, opt.seed)
+    storage_path = optuna_storage_db or db_path
     study = optuna.create_study(
         study_name=study_name,
-        storage=f"sqlite:///{db_path}",
+        storage=f"sqlite:///{storage_path}",
         load_if_exists=True,
         direction=opt.direction,
         sampler=sampler,

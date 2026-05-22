@@ -1,10 +1,16 @@
 """High-level run orchestration (engine + storage)."""
+import os
 from typing import Dict, Optional, Type
 
 from backtest.engine import BacktestResult, EngineConfig, run_backtest
+from backtest.report_paths import run_report_dir
 from backtest.storage import create_run, finish_run, persist_run_events, persist_run_metrics
 from backtest.strategy_base import StrategyBase
 from db import init_db
+
+
+def _parquet_events_enabled() -> bool:
+    return os.getenv("BACKTEST_EVENTS_PARQUET", "0").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def execute_and_persist(
@@ -13,6 +19,7 @@ def execute_and_persist(
     strategy_params: Optional[Dict] = None,
     trial_id: Optional[int] = None,
     initial_state: Optional[Dict] = None,
+    events_batch_size: int = 5000,
 ) -> BacktestResult:
     init_db(config.db_path)
     strategy_params = strategy_params or {}
@@ -41,7 +48,24 @@ def execute_and_persist(
             run_id=run_id,
             trial_id=trial_id,
         )
-        persist_run_events(run_cfg.db_path, run_id=run_id, events=result.events)
+        persist_run_events(
+            run_cfg.db_path,
+            run_id=run_id,
+            events=result.events,
+            batch_size=events_batch_size,
+        )
+        if _parquet_events_enabled() and (run_cfg.events_mode or "full").strip().lower() == "full":
+            try:
+                from backtest.events_parquet import dump_events_to_parquet  # local import
+
+                target_dir = run_report_dir("reports", run_id)
+                dump_events_to_parquet(
+                    output_path=os.path.join(target_dir, "events.parquet"),
+                    events=result.events,
+                )
+            except Exception:
+                # Parquet sink is best-effort and must never fail the run.
+                pass
         persist_run_metrics(
             run_cfg.db_path,
             run_id=run_id,

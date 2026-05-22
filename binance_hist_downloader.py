@@ -8,11 +8,30 @@ Rows are yielded as tuples matching the DB schema in `db.py`.
 """
 from difflib import get_close_matches
 from typing import Dict, Iterator, List, Optional, Tuple
-import requests  # type: ignore[import-untyped]
+import csv
+import io
+import random
 import time
 import zipfile
-import io
-import csv
+
+import requests  # type: ignore[import-untyped]
+
+
+def _is_transient_status(status: int) -> bool:
+    return status in (408, 425, 429, 500, 502, 503, 504)
+
+
+def _retry_after_seconds(response: "requests.Response", base: float, attempt: int) -> float:
+    header = response.headers.get("Retry-After") if response is not None else None
+    if header:
+        try:
+            return max(0.0, float(header))
+        except (TypeError, ValueError):
+            pass
+    # Exponential backoff with capped jitter
+    delay = base * (2 ** attempt)
+    jitter = random.uniform(0.0, min(1.0, delay * 0.25))
+    return min(60.0, delay) + jitter
 
 
 class BinanceDownloader:
@@ -47,13 +66,12 @@ class BinanceDownloader:
         end_ts: Optional[int] = None,
         limit: int = 1000,
         sleep_on_rate_limit: float = 0.5,
+        max_retries: int = 6,
     ) -> Iterator[Tuple]:
         """Yield kline rows (tuples) from Binance REST API.
 
-        Parameters:
-        - symbol: e.g. BTCUSDT
-        - interval: e.g. 1m, 1h, 1d
-        - start_ts, end_ts: milliseconds since epoch
+        Retries with exponential backoff + jitter on transient errors (429/5xx
+        and network failures). Honors a `Retry-After` header when present.
         """
         path = f"/api/v3/klines"
         url = self.BASE_API + path
@@ -64,10 +82,24 @@ class BinanceDownloader:
             params["endTime"] = int(end_ts)
 
         while True:
-            r = self.s.get(url, params=params, timeout=30)
-            if r.status_code == 429:
-                time.sleep(sleep_on_rate_limit)
-                continue
+            attempt = 0
+            r = None
+            while True:
+                try:
+                    r = self.s.get(url, params=params, timeout=30)
+                except requests.RequestException:
+                    if attempt >= max_retries:
+                        raise
+                    time.sleep(_retry_after_seconds(None, sleep_on_rate_limit, attempt))
+                    attempt += 1
+                    continue
+                if _is_transient_status(r.status_code):
+                    if attempt >= max_retries:
+                        r.raise_for_status()
+                    time.sleep(_retry_after_seconds(r, sleep_on_rate_limit, attempt))
+                    attempt += 1
+                    continue
+                break
             r.raise_for_status()
             data = r.json()
             if not data:
@@ -216,17 +248,43 @@ class BinanceDownloader:
             if end_ts is not None and next_start > end_ts:
                 break
 
-    def download_klines_zip(self, symbol: str, interval: str, year: int, month: int) -> Iterator[Tuple]:
-        """Download monthly zip from data.binance.vision and yield rows from the CSV inside.
+    def download_klines_zip(
+        self,
+        symbol: str,
+        interval: str,
+        year: int,
+        month: int,
+        max_retries: int = 6,
+        sleep_base_sec: float = 0.5,
+    ) -> Iterator[Tuple]:
+        """Download monthly zip from data.binance.vision and yield CSV rows.
 
-        Example URL:
+        Retries with exponential backoff + jitter on transient HTTP/network
+        failures. Example URL:
         https://data.binance.vision/data/spot/monthly/klines/BTCUSDT/1m/BTCUSDT-1m-2021-01.zip
         """
         symbol_u = symbol.upper()
         month_str = f"{month:02d}"
         filename = f"{symbol_u}-{interval}-{year}-{month_str}.zip"
         url = f"{self.DATA_ZIP_BASE}/{symbol_u}/{interval}/{filename}"
-        r = self.s.get(url, stream=True, timeout=30)
+        attempt = 0
+        r = None
+        while True:
+            try:
+                r = self.s.get(url, stream=True, timeout=30)
+            except requests.RequestException:
+                if attempt >= max_retries:
+                    raise
+                time.sleep(_retry_after_seconds(None, sleep_base_sec, attempt))
+                attempt += 1
+                continue
+            if _is_transient_status(r.status_code):
+                if attempt >= max_retries:
+                    r.raise_for_status()
+                time.sleep(_retry_after_seconds(r, sleep_base_sec, attempt))
+                attempt += 1
+                continue
+            break
         r.raise_for_status()
         with zipfile.ZipFile(io.BytesIO(r.content)) as z:
             # find the CSV file inside
