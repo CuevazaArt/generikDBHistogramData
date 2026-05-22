@@ -1,6 +1,6 @@
 """Strategy registry and parameter/search-space helpers."""
 from decimal import Decimal, ROUND_FLOOR
-from typing import Any, Dict, Optional, Type
+from typing import Any, Callable, Dict, Optional, Type
 
 from backtest.strategy_base import StrategyBase
 from backtest.strategies import (
@@ -38,6 +38,15 @@ STRATEGY_REGISTRY: Dict[str, Type[StrategyBase]] = {
 ALIAS_STRATEGY_NAMES = {"dorothy_hub", "elphaba_hub"}
 
 
+# Override hooks populated by :func:`backtest.library.register_with_strategy_registry`.
+# Library entries that introduce brand-new strategy names register a callable here
+# so the legacy hard-coded if/elif chain in :func:`params_from_cli` /
+# :func:`suggest_params` is bypassed for them. Existing strategies keep their
+# explicit cases intact so we maintain 100% backward compatibility.
+PARAMS_FROM_CLI_OVERRIDES: Dict[str, Callable[[Any], Dict[str, Any]]] = {}
+SUGGEST_PARAMS_OVERRIDES: Dict[str, Callable[..., Dict[str, Any]]] = {}
+
+
 def get_strategy(strategy_name: str) -> Type[StrategyBase]:
     key = (strategy_name or "").strip().lower()
     if key not in STRATEGY_REGISTRY:
@@ -54,6 +63,23 @@ def list_strategy_names(include_aliases: bool = False) -> list[str]:
 
 def params_from_cli(args: Any, strategy_name: str) -> Dict[str, Any]:
     key = strategy_name.strip().lower()
+    override = PARAMS_FROM_CLI_OVERRIDES.get(key)
+    if override is not None and key not in (
+        "dorothy",
+        "dorothy_hub",
+        "dorothy_legacy",
+        "elphaba",
+        "elphaba_hub",
+        "ha_trend",
+        "masha",
+        "louise",
+        "louise_lucky",
+        "anti_louise",
+        "anti_louise_lucky",
+        "thusnelda",
+        "sma_cross",
+    ):
+        return override(args)
     if key in ("dorothy", "dorothy_hub"):
         return {
             "profit_factor": float(args.profit_factor),
@@ -205,6 +231,23 @@ def _suggest_float_param(
 def suggest_params(trial: Any, strategy_name: str, search_overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     key = strategy_name.strip().lower()
     overrides = search_overrides or {}
+    override = SUGGEST_PARAMS_OVERRIDES.get(key)
+    if override is not None and key not in (
+        "dorothy",
+        "dorothy_hub",
+        "dorothy_legacy",
+        "elphaba",
+        "elphaba_hub",
+        "ha_trend",
+        "masha",
+        "louise",
+        "louise_lucky",
+        "anti_louise",
+        "anti_louise_lucky",
+        "thusnelda",
+        "sma_cross",
+    ):
+        return override(trial, overrides)
     if key in ("dorothy", "dorothy_hub"):
         md_min, md_max = _get_float_range(overrides, "margin_drop_factor_min", "margin_drop_factor_max", 0.001, 0.02)
         r_min, r_max = _get_int_range(overrides, "max_rungs_min", "max_rungs_max", 2, 10)

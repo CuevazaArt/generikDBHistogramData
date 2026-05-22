@@ -1,0 +1,200 @@
+name: wheels
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: wheels-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  CRATE_MANIFEST: crates/genericbt-core/Cargo.toml
+
+jobs:
+  linux:
+    name: wheel linux-${{ matrix.target }} py${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64, aarch64]
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for Rust crate
+        id: crate
+        run: |
+          if [ -f "${CRATE_MANIFEST}" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Rust crate ${CRATE_MANIFEST} not present yet; skipping wheel build."
+          fi
+
+      - name: Setup Python ${{ matrix.python-version }}
+        if: steps.crate.outputs.present == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Build wheels (maturin manylinux)
+        if: steps.crate.outputs.present == 'true'
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          manylinux: auto
+          args: --release --out dist --manifest-path ${{ env.CRATE_MANIFEST }} -i python${{ matrix.python-version }}
+
+      - name: Upload wheels
+        if: steps.crate.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux-${{ matrix.target }}-py${{ matrix.python-version }}
+          path: dist/*.whl
+
+  windows:
+    name: wheel windows-${{ matrix.target }} py${{ matrix.python-version }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x64, x86]
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for Rust crate
+        id: crate
+        shell: pwsh
+        run: |
+          if (Test-Path $env:CRATE_MANIFEST) {
+            "present=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          } else {
+            "present=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            Write-Host "::notice::Rust crate $env:CRATE_MANIFEST not present yet; skipping wheel build."
+          }
+
+      - name: Setup Python ${{ matrix.python-version }}
+        if: steps.crate.outputs.present == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          architecture: ${{ matrix.target == 'x86' && 'x86' || 'x64' }}
+
+      - name: Build wheels (maturin windows)
+        if: steps.crate.outputs.present == 'true'
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist --manifest-path ${{ env.CRATE_MANIFEST }} -i python${{ matrix.python-version }}
+
+      - name: Upload wheels
+        if: steps.crate.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-windows-${{ matrix.target }}-py${{ matrix.python-version }}
+          path: dist/*.whl
+
+  macos:
+    name: wheel macos-${{ matrix.target }} py${{ matrix.python-version }}
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64, aarch64]
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for Rust crate
+        id: crate
+        run: |
+          if [ -f "${CRATE_MANIFEST}" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Rust crate ${CRATE_MANIFEST} not present yet; skipping wheel build."
+          fi
+
+      - name: Setup Python ${{ matrix.python-version }}
+        if: steps.crate.outputs.present == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Build wheels (maturin macos)
+        if: steps.crate.outputs.present == 'true'
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist --manifest-path ${{ env.CRATE_MANIFEST }} -i python${{ matrix.python-version }}
+
+      - name: Upload wheels
+        if: steps.crate.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-macos-${{ matrix.target }}-py${{ matrix.python-version }}
+          path: dist/*.whl
+
+  sdist:
+    name: sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for Rust crate
+        id: crate
+        run: |
+          if [ -f "${CRATE_MANIFEST}" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Rust crate ${CRATE_MANIFEST} not present yet; skipping sdist."
+          fi
+
+      - name: Setup Python 3.11
+        if: steps.crate.outputs.present == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build sdist
+        if: steps.crate.outputs.present == 'true'
+        uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist --manifest-path ${{ env.CRATE_MANIFEST }}
+
+      - name: Upload sdist
+        if: steps.crate.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-sdist
+          path: dist/*.tar.gz
+
+  # ---------------------------------------------------------------------------
+  # Future PyPI publish job (OIDC trusted publishing). Uncomment and configure
+  # `pypi.org` trusted publisher (Repository name, workflow filename, environment
+  # name) before enabling. Requires a `pypi` environment in repo settings.
+  # ---------------------------------------------------------------------------
+  # publish:
+  #   name: publish to PyPI
+  #   needs: [linux, windows, macos, sdist]
+  #   runs-on: ubuntu-latest
+  #   if: startsWith(github.ref, 'refs/tags/v')
+  #   environment: pypi
+  #   permissions:
+  #     id-token: write
+  #   steps:
+  #     - uses: actions/download-artifact@v4
+  #       with:
+  #         pattern: wheels-*
+  #         path: dist
+  #         merge-multiple: true
+  #     - uses: pypa/gh-action-pypi-publish@release/v1

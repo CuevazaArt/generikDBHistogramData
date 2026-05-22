@@ -1,0 +1,52 @@
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: "/"
+    target-branch: main
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - python
+    commit-message:
+      prefix: "pip"
+      include: scope
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    target-branch: main
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - github-actions
+    commit-message:
+      prefix: "ci"
+      include: scope
+
+  # ---------------------------------------------------------------------------
+  # Enable once the Rust core crate exists at crates/genericbt-core/ (Fase 1).
+  # ---------------------------------------------------------------------------
+  # - package-ecosystem: cargo
+  #   directory: "/crates/genericbt-core"
+  #   target-branch: main
+  #   schedule:
+  #     interval: weekly
+  #     day: monday
+  #     time: "06:00"
+  #     timezone: Etc/UTC
+  #   open-pull-requests-limit: 3
+  #   labels:
+  #     - dependencies
+  #     - rust
+  #   commit-message:
+  #     prefix: "cargo"
+  #     include: scope

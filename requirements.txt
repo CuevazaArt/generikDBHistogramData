@@ -7,3 +7,9 @@ optuna
 matplotlib
 pytest
 psutil
+pyarrow>=15
+duckdb>=1.0
+psycopg[binary]>=3.1
+psycopg_pool>=3.2
+sqlalchemy>=2.0
+pyyaml>=6.0

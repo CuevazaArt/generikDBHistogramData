@@ -3,8 +3,9 @@ import csv
 import json
 import statistics
 import os
+import sys
 from datetime import datetime, timezone
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
     import matplotlib.pyplot as plt  # type: ignore[import-not-found]
@@ -16,10 +17,147 @@ def ensure_dir(path: str) -> None:
     os.makedirs(path, exist_ok=True)
 
 
-def plot_equity_and_drawdown(equity_rows: List[Tuple], output_dir: str, run_id: int) -> Dict[str, str]:
+def _resolve_equity_rows(
+    eq_rows: Optional[List[Tuple]],
+    *,
+    run_id: Optional[int] = None,
+    data_root: str = "data",
+) -> List[Tuple]:
+    """Return the populated equity rows, falling back to Parquet when empty.
+
+    Existing callers continue to pass already-loaded SQLite rows; that path
+    is preserved verbatim. When ``eq_rows`` is empty and a ``run_id`` is
+    supplied, the resolver attempts to read the Parquet equity curve via
+    DuckDB. Any read error degrades silently to an empty list.
+    """
+    if eq_rows:
+        return eq_rows
+    if run_id is None:
+        return []
+    try:
+        from backtest import duckdb_reads
+    except ImportError:
+        return []
+    if not duckdb_reads.is_available():
+        return []
+    if not duckdb_reads.has_equity_parquet(int(run_id), data_root):
+        return []
+    try:
+        return duckdb_reads.equity_curve_from_parquet(int(run_id), data_root=data_root)
+    except Exception:
+        return []
+
+
+def _select_backend(run_id: int, data_root: str, db_path: Optional[str]) -> str:
+    """Choose ``duckdb`` when Parquet artefacts exist; otherwise ``sqlite``.
+
+    Used by :func:`render_run_dashboard`. The decision is purely capability
+    based: presence of equity/events Parquet under ``data_root``. ``db_path``
+    is unused here but accepted so future heuristics can take it into
+    account (e.g. confirming the SQLite file is reachable).
+    """
+    del db_path
+    try:
+        from backtest import duckdb_reads
+    except ImportError:
+        return "sqlite"
+    if duckdb_reads.is_available() and duckdb_reads.has_equity_parquet(int(run_id), data_root):
+        return "duckdb"
+    return "sqlite"
+
+
+def _downsample_equity_rows(
+    rows: List[Tuple[int, int, float]],
+    max_points: int = 10_000,
+) -> List[Tuple[int, int, float]]:
+    """Reduce equity points using LTTB (Largest-Triangle-Three-Buckets).
+
+    Reference: Sveinn Steinarsson, "Downsampling Time Series for Visual
+    Representation", MSc thesis, University of Iceland, 2013. The algorithm
+    walks the series once, splits the interior into roughly equal-sized
+    buckets, and from each bucket keeps the point that maximizes the area of
+    the triangle formed with the previously kept point and the average of
+    the next bucket. Endpoints are forced.
+
+    Args:
+        rows: list of (seq, event_time, equity) ordered by seq ASC.
+        max_points: target number of points to keep. If len(rows) <= max_points,
+                    returns rows unchanged.
+
+    Returns:
+        A subsampled list of the same shape, preserving the first and last
+        points exactly, deterministic across calls.
+    """
+    n = len(rows)
+    if max_points <= 0 or max_points >= n:
+        return list(rows)
+    if max_points <= 2:
+        return [rows[0], rows[-1]]
+
+    # Bucket size over the interior (excluding the two forced endpoints).
+    bucket_size = (n - 2) / (max_points - 2)
+
+    sampled: List[Tuple[int, int, float]] = [rows[0]]
+    a = 0  # index of the previously selected point
+    last_idx = n - 1
+
+    for i in range(max_points - 2):
+        next_start = int((i + 1) * bucket_size) + 1
+        next_end = int((i + 2) * bucket_size) + 1
+        if next_end > last_idx:
+            next_end = last_idx
+        if next_start >= next_end:
+            avg_x = float(rows[last_idx][0])
+            avg_y = float(rows[last_idx][2])
+        else:
+            sx = 0.0
+            sy = 0.0
+            cnt = next_end - next_start
+            for j in range(next_start, next_end):
+                sx += float(rows[j][0])
+                sy += float(rows[j][2])
+            avg_x = sx / cnt
+            avg_y = sy / cnt
+
+        cur_start = int(i * bucket_size) + 1
+        cur_end = int((i + 1) * bucket_size) + 1
+        if cur_end > last_idx:
+            cur_end = last_idx
+        if cur_start >= cur_end:
+            cur_start = max(1, last_idx - 1)
+            cur_end = cur_start + 1
+
+        ax = float(rows[a][0])
+        ay = float(rows[a][2])
+        max_area = -1.0
+        max_idx = cur_start
+        for j in range(cur_start, cur_end):
+            bx = float(rows[j][0])
+            by = float(rows[j][2])
+            area = abs((ax - avg_x) * (by - ay) - (ax - bx) * (avg_y - ay))
+            if area > max_area:
+                max_area = area
+                max_idx = j
+
+        sampled.append(rows[max_idx])
+        a = max_idx
+
+    sampled.append(rows[last_idx])
+    return sampled
+
+
+def plot_equity_and_drawdown(
+    equity_rows: List[Tuple],
+    output_dir: str,
+    run_id: int,
+    max_plot_points: Optional[int] = None,
+) -> Dict[str, str]:
     if plt is None:
         raise RuntimeError("Matplotlib is not installed. Run: pip install -r requirements.txt")
     ensure_dir(output_dir)
+    equity_rows = _resolve_equity_rows(equity_rows, run_id=run_id)
+    if max_plot_points and len(equity_rows) > max_plot_points:
+        equity_rows = _downsample_equity_rows(equity_rows, max_plot_points)
     seq = [int(r[0]) for r in equity_rows]
     equity = [float(r[2]) for r in equity_rows]
     if not seq or not equity:
@@ -137,6 +275,7 @@ def plot_monthly_return_spectrum(equity_rows: List[Tuple], output_dir: str, run_
     if plt is None:
         raise RuntimeError("Matplotlib is not installed. Run: pip install -r requirements.txt")
     ensure_dir(output_dir)
+    equity_rows = _resolve_equity_rows(equity_rows, run_id=run_id)
     if not equity_rows:
         return ""
     monthly: Dict[str, List[float]] = {}
@@ -369,6 +508,7 @@ def plot_monthly_return_heatmap(equity_rows: List[Tuple], output_dir: str, run_i
     if plt is None:
         raise RuntimeError("Matplotlib is not installed. Run: pip install -r requirements.txt")
     ensure_dir(output_dir)
+    equity_rows = _resolve_equity_rows(equity_rows, run_id=run_id)
     if not equity_rows:
         return ""
     monthly: Dict[str, List[float]] = {}
@@ -652,3 +792,106 @@ def export_study_optuna_summary(output_dir: str, study_name: str, summary_payloa
         f.write(f"- worst_trial: {worst.get('trial_number','')} objective={worst.get('objective','')}\n")
     return out
 
+
+def render_run_dashboard(
+    output_dir: str,
+    run_id: int,
+    *,
+    data_root: str = "data",
+    backend: str = "auto",
+    db_path: Optional[str] = None,
+) -> Dict[str, str]:
+    """Render the full report bundle for a single run.
+
+    Loads equity, signal and event rows once and feeds them to every existing
+    plot/export helper, plus the integrated Markdown report. ``backend``
+    controls where the rows come from:
+
+    * ``"auto"`` (default): use DuckDB-over-Parquet when the run has Parquet
+      artefacts under ``data_root``, otherwise SQLite via ``db_path``.
+    * ``"duckdb"``: force the DuckDB path; requires Parquet artefacts.
+    * ``"sqlite"``: force the SQLite path; requires ``db_path``.
+
+    Returns a dict mapping each artefact name (``equity``, ``drawdown``,
+    ``returns_hist``, ``trade_signal_hist``, ``signal_activation_hist``,
+    ``monthly_return_spectrum``, ``monthly_return_heatmap``,
+    ``fill_activity_heatmap``, ``integrated_report``) to its absolute or
+    relative path on disk. Missing artefacts (e.g. no fills recorded) are
+    omitted from the dict instead of pointing at an empty file.
+    """
+    if backend == "auto":
+        backend_resolved = _select_backend(int(run_id), data_root, db_path)
+    else:
+        backend_resolved = backend
+    print(f"[reports] run_id={int(run_id)} backend={backend_resolved}", file=sys.stderr)
+
+    descriptor: Dict[str, Any] = {}
+    metrics: Dict[str, float] = {}
+
+    if backend_resolved == "duckdb":
+        from backtest import duckdb_reads
+
+        if not duckdb_reads.is_available():
+            raise RuntimeError(
+                "render_run_dashboard(backend='duckdb') requires duckdb to be installed."
+            )
+        eq_rows = duckdb_reads.equity_curve_from_parquet(int(run_id), data_root=data_root)
+        sig_rows = duckdb_reads.signal_events_from_parquet(int(run_id), data_root=data_root)
+        ev_rows = duckdb_reads.run_events_from_parquet(int(run_id), data_root=data_root)
+        # Metrics/descriptor live in the metadata DB. When the caller provides
+        # a db_path we opportunistically fetch them so the integrated report
+        # has populated tables; otherwise we fall back to empty dicts.
+        if db_path:
+            try:
+                from backtest.storage import run_descriptor as _rd, summarize_run as _sr
+
+                descriptor = _rd(db_path, run_id=int(run_id)) or {}
+                metrics = _sr(db_path, run_id=int(run_id)).get("metrics", {})
+            except Exception:
+                descriptor = {}
+                metrics = {}
+    elif backend_resolved == "sqlite":
+        if not db_path:
+            raise RuntimeError(
+                "render_run_dashboard(backend='sqlite') requires db_path to be set."
+            )
+        from backtest.storage import (
+            run_descriptor as _rd,
+            run_equity_curve as _req,
+            run_events as _rev,
+            run_signal_events as _rse,
+            summarize_run as _sr,
+        )
+
+        eq_rows = _req(db_path, run_id=int(run_id))
+        sig_rows = _rse(db_path, run_id=int(run_id))
+        ev_rows = _rev(db_path, run_id=int(run_id))
+        descriptor = _rd(db_path, run_id=int(run_id)) or {}
+        metrics = _sr(db_path, run_id=int(run_id)).get("metrics", {})
+    else:
+        raise ValueError(f"render_run_dashboard: unknown backend {backend!r}")
+
+    ensure_dir(output_dir)
+    artefacts: Dict[str, str] = {}
+    artefacts.update(plot_equity_and_drawdown(eq_rows, output_dir=output_dir, run_id=int(run_id)))
+    artefacts.update(plot_signal_histograms(sig_rows, output_dir=output_dir, run_id=int(run_id)))
+    spectrum_path = plot_monthly_return_spectrum(eq_rows, output_dir=output_dir, run_id=int(run_id))
+    if spectrum_path:
+        artefacts["monthly_return_spectrum"] = spectrum_path
+    heatmap_path = plot_monthly_return_heatmap(eq_rows, output_dir=output_dir, run_id=int(run_id))
+    if heatmap_path:
+        artefacts["monthly_return_heatmap"] = heatmap_path
+    activity_path = plot_fill_activity_heatmap(ev_rows, output_dir=output_dir, run_id=int(run_id))
+    if activity_path:
+        artefacts["fill_activity_heatmap"] = activity_path
+
+    integrated = export_run_integrated_report(
+        output_dir=output_dir,
+        file_stem=f"run_{int(run_id)}",
+        descriptor=descriptor,
+        metrics=metrics,
+        equity_rows=eq_rows,
+        graph_paths=artefacts,
+    )
+    artefacts["integrated_report"] = integrated
+    return artefacts

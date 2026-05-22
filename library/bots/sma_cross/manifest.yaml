@@ -1,0 +1,26 @@
+schema_version: 1
+name: sma_cross
+kind: bot
+version: 1.0.0
+author: ""
+description: "Cruce clásico de SMAs (fast/slow) sobre price_source."
+entry_point: "backtest.strategies:SmaCrossStrategy"
+registry_aliases: []
+tags: ["trend", "long-only", "baseline"]
+created_at: "2026-05-22T00:00:00Z"
+updated_at: "2026-05-22T00:00:00Z"
+default_params:
+  fast: 10
+  slow: 30
+search_space:
+  fast: { type: "int", min: 5, max: 40 }
+  slow: { type: "int", min: 20, max: 120 }
+data_requirements:
+  symbols: ["*"]
+  intervals: ["1m", "1h", "1d"]
+  required_columns: ["open", "high", "low", "close", "volume"]
+  derived_columns: []
+data_contributions:
+  derived_dataset: null
+notes_file: "notes.md"
+preset_dir: "presets"

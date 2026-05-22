@@ -1,0 +1,32 @@
+schema_version: 1
+name: dorothy_legacy
+kind: bot
+version: 1.0.0
+author: ""
+description: "Adaptador DCA inspirado en la lógica live original de Dorothy (sin gate de tendencia HA)."
+entry_point: "backtest.strategies:DorothyBacktestStrategy"
+registry_aliases: []
+tags: ["dca", "long-only", "legacy"]
+created_at: "2026-05-22T00:00:00Z"
+updated_at: "2026-05-22T00:00:00Z"
+default_params:
+  profit_factor: 0.05
+  margin_drop_factor: 0.004
+  quote_order_qty_usdt: 8.0
+  min_order_notional: 6.0
+  max_order_notional: 10.0
+  max_active_orders: 200
+  max_rungs: 5
+search_space:
+  profit_factor: { type: "float", min: 0.005, max: 0.08 }
+  margin_drop_factor: { type: "float", min: 0.001, max: 0.02 }
+  max_rungs: { type: "int", min: 2, max: 10 }
+data_requirements:
+  symbols: ["*"]
+  intervals: ["1m", "1h"]
+  required_columns: ["open", "high", "low", "close", "volume"]
+  derived_columns: []
+data_contributions:
+  derived_dataset: null
+notes_file: "notes.md"
+preset_dir: "presets"

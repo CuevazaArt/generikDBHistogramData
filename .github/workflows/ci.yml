@@ -5,15 +5,77 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
 jobs:
+  lint:
+    name: lint (ruff + pre-commit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install lint tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff pre-commit
+
+      - name: ruff check
+        run: ruff check .
+
+      - name: ruff format --check
+        run: ruff format --check .
+
+      - name: pre-commit run --all-files
+        if: hashFiles('.pre-commit-config.yaml') != ''
+        run: pre-commit run --all-files --show-diff-on-failure
+
+  types:
+    name: types (mypy, soft)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install mypy
+        run: |
+          python -m pip install --upgrade pip
+          pip install mypy
+
+      - name: mypy (ignore-missing-imports)
+        run: |
+          mypy --ignore-missing-imports --pretty --no-error-summary \
+            backtest db.py cli.py backtest_cli.py
+
   test:
-    runs-on: windows-latest
+    name: test (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest]
         python-version: ["3.11", "3.13"]
-
     steps:
       - uses: actions/checkout@v4
 
@@ -22,17 +84,46 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
+          cache-dependency-path: requirements.txt
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Compile sanity (py_compile on edited modules)
-        run: |
-          python -m py_compile backtest/resources.py backtest/guards.py backtest/engine.py backtest/runner.py backtest/storage.py backtest/data_feed.py backtest/data_cache.py backtest/sweet_spot.py backtest/optimize.py backtest/scheduler.py backtest/telemetry.py backtest/events_parquet.py backtest/data_integrity.py db.py binance_hist_downloader.py backtest_cli.py scripts/run_xrpusdt_2024_dorothy_strict.py scripts/launch_xrpusdt_2024_dorothy_pf_parallel.py
-
       - name: Run tests
         env:
           PYTHONPATH: .
-        run: python -m pytest tests/ -q --no-header
+        run: python -m pytest tests/ -q --no-header --maxfail=10
+
+  smoke-scripts:
+    name: smoke-scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Import smoke
+        env:
+          PYTHONPATH: .
+        run: python -c "import backtest, db; print('imports ok')"
+
+      - name: compileall sanity
+        run: python -m compileall -q backtest db.py cli.py backtest_cli.py
+
+      - name: Inspect klines.db (only if checked-in fixture exists)
+        if: hashFiles('klines.db') != ''
+        env:
+          PYTHONPATH: .
+        run: python scripts/inspect_klines_db.py klines.db

@@ -61,6 +61,30 @@ def _quarter_windows_2024() -> List[Tuple[str, int, int]]:
     ]
 
 
+_MS_PER_DAY = 24 * 60 * 60 * 1000
+
+
+def _execution_windows(start_ts: int, end_ts: int) -> List[Tuple[str, int, int]]:
+    """Build chain steps clipped to [start_ts, end_ts].
+
+    Spans of at most 32 calendar days use a single window (one month).
+    Longer spans use quarterly steps, each clipped to the requested range.
+    """
+    if start_ts >= end_ts:
+        raise ValueError(f"start_ts must be < end_ts (got {start_ts} >= {end_ts})")
+    span_ms = int(end_ts) - int(start_ts)
+    if span_ms <= 32 * _MS_PER_DAY:
+        return [("MONTH", int(start_ts), int(end_ts))]
+    windows: List[Tuple[str, int, int]] = []
+    for name, q_start, q_end in _quarter_windows_2024():
+        if q_end < start_ts or q_start > end_ts:
+            continue
+        windows.append((name, max(q_start, start_ts), min(q_end, end_ts)))
+    if not windows:
+        return [("RANGE", int(start_ts), int(end_ts))]
+    return windows
+
+
 def _decide_resource_cap(combo_count: int, dataset_candles: int, cpu_cap_pct: float) -> dict:
     profile = detect_resources()
     cpu_ratio = max(0.1, min(1.0, float(cpu_cap_pct) / 100.0))
@@ -136,14 +160,14 @@ def _guard_wait_if_needed(
 def _run_chain_for_profit_factor(
     args: argparse.Namespace,
     strategy_cls,
-    quarter_windows: List[Tuple[str, int, int]],
+    execution_windows: List[Tuple[str, int, int]],
     strategy_params: Dict[str, Any],
     guard: ResourceGuard,
     guard_events: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
     state: Dict[str, Any] | None = None
     quarter_runs: List[Dict[str, Any]] = []
-    for quarter_name, q_start, q_end in quarter_windows:
+    for quarter_name, q_start, q_end in execution_windows:
         _guard_wait_if_needed(
             guard=guard,
             guard_events=guard_events,
@@ -255,12 +279,14 @@ def _write_log_markdown(path: str, payload: Dict[str, Any]) -> None:
 
 
 def run(args: argparse.Namespace) -> None:
-    quarter_windows = _quarter_windows_2024()
+    execution_windows = _execution_windows(int(args.start_ts), int(args.end_ts))
     profit_values = _build_profit_grid(args.profit_factor_grid)
     quote_order_qty = 8.0
     max_rungs = min(200, math.floor(args.initial_cash / quote_order_qty))
-    yearly_candles = _count_candles(args.db, args.symbol, args.interval, args.start_ts, args.end_ts)
-    resources = _decide_resource_cap(combo_count=len(profit_values), dataset_candles=yearly_candles, cpu_cap_pct=args.cpu_cap_pct)
+    window_candles = _count_candles(args.db, args.symbol, args.interval, args.start_ts, args.end_ts)
+    resources = _decide_resource_cap(
+        combo_count=len(profit_values), dataset_candles=window_candles, cpu_cap_pct=args.cpu_cap_pct
+    )
 
     if bool(getattr(args, "explain_only", False)):
         # Dry-run: estimate cost without touching DB or spawning work.
@@ -268,13 +294,14 @@ def run(args: argparse.Namespace) -> None:
             "study_preview": True,
             "symbol": args.symbol,
             "interval": args.interval,
-            "yearly_candle_count": yearly_candles,
+            "window_candle_count": window_candles,
+            "execution_windows": execution_windows,
             "profit_factor_grid": profit_values,
             "max_rungs": max_rungs,
             "resource_plan": resources,
             "workload_estimate": estimate_workload(
-                dataset_candles=yearly_candles,
-                n_trials=len(profit_values) * len(quarter_windows),
+                dataset_candles=window_candles,
+                n_trials=len(profit_values) * len(execution_windows),
             ),
         }
         print(json.dumps(explain, ensure_ascii=False, indent=2))
@@ -284,7 +311,8 @@ def run(args: argparse.Namespace) -> None:
     guard = _guard_from_args(args)
     guard_events: List[Dict[str, Any]] = []
 
-    study_name = f"dorothy_xrpusdt_1s_2024_quarterly_chain_{_now_tag()}"
+    mode_tag = "month" if len(execution_windows) == 1 and execution_windows[0][0] == "MONTH" else "chain"
+    study_name = f"dorothy_xrpusdt_1s_{mode_tag}_{_now_tag()}"
     output_dir = strict_report_dir(args.output_root, study_name)
     os.makedirs(output_dir, exist_ok=True)
     write_manifest(
@@ -309,7 +337,7 @@ def run(args: argparse.Namespace) -> None:
             _run_chain_for_profit_factor(
                 args=args,
                 strategy_cls=strategy_cls,
-                quarter_windows=quarter_windows,
+                execution_windows=execution_windows,
                 strategy_params=params,
                 guard=guard,
                 guard_events=guard_events,
@@ -347,8 +375,8 @@ def run(args: argparse.Namespace) -> None:
         },
         "resource_guard_events": guard_events,
         "stale_run_cleanup": stale_runs,
-        "yearly_candle_count": yearly_candles,
-        "quarter_windows": quarter_windows,
+        "window_candle_count": window_candles,
+        "execution_windows": execution_windows,
         "candidates": candidates,
         "best_candidate": best_candidate,
         "code_version": git_snapshot(),
@@ -368,8 +396,13 @@ def main() -> None:
     parser.add_argument("--db", default="klines.db")
     parser.add_argument("--symbol", default="XRPUSDT")
     parser.add_argument("--interval", default="1s")
-    parser.add_argument("--start_ts", type=int, default=1704067200000)
-    parser.add_argument("--end_ts", type=int, default=1735689599000)
+    parser.add_argument("--start_ts", type=int, default=1704067200000, help="UTC ms; default 2024-01-01")
+    parser.add_argument(
+        "--end_ts",
+        type=int,
+        default=1706745599000,
+        help="UTC ms; default 2024-01-31 23:59:59 (un mes). Anio completo: 1735689599000",
+    )
     parser.add_argument("--initial_cash", type=float, default=1000.0)
     parser.add_argument("--fee_rate", type=float, default=0.001)
     parser.add_argument("--slippage_bps", type=float, default=2.0)

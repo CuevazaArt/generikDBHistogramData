@@ -1,0 +1,29 @@
+schema_version: 1
+name: elphaba
+kind: bot
+version: 1.0.0
+author: ""
+description: "DCA inversa: trata cada compra spot como anclaje de un short simulado mientras el gate HA esté BEARISH."
+entry_point: "backtest.strategies:ElphabaHubStrategy"
+registry_aliases: ["elphaba_hub"]
+tags: ["dca-inverse", "pecunator", "trend-gated"]
+created_at: "2026-05-22T00:00:00Z"
+updated_at: "2026-05-22T00:00:00Z"
+default_params:
+  profit_factor: 0.05
+  margin_rise_factor: 0.03
+  quote_order_qty_usdt: 8.0
+  max_rungs: 5
+search_space:
+  profit_factor: { type: "float", min: 0.005, max: 0.08 }
+  margin_rise_factor: { type: "float", min: 0.005, max: 0.05 }
+  max_rungs: { type: "int", min: 2, max: 10 }
+data_requirements:
+  symbols: ["*"]
+  intervals: ["1m", "1h"]
+  required_columns: ["open", "high", "low", "close", "volume"]
+  derived_columns: ["pec_trend", "ha_open", "ha_close"]
+data_contributions:
+  derived_dataset: null
+notes_file: "notes.md"
+preset_dir: "presets"

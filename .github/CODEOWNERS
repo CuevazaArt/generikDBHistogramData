@@ -1,0 +1,7 @@
+# Default owner for everything in the repo. Reviews are requested from this
+# owner unless a more specific rule below matches.
+#
+# Owner set from `git config user.name` at scaffolding time. Replace with the
+# correct GitHub @handle (organisation members or teams) before relying on
+# required-reviews policy.
+*       @Cuevaza

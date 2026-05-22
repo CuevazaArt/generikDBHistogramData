@@ -1,0 +1,88 @@
+name: nightly-integrity
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-integrity-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONPATH: ${{ github.workspace }}
+
+jobs:
+  backup-purge-roundtrip:
+    name: backup -> verify -> purge roundtrip
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Prepare temp workspace
+        id: tmp
+        run: |
+          set -e
+          TMP_DIR="$(mktemp -d -t genericbt-nightly-XXXXXX)"
+          TMP_DB="${TMP_DIR}/synthetic_klines.db"
+          TMP_DATA="${TMP_DIR}/data_klines"
+          echo "tmp_dir=${TMP_DIR}"   >> "$GITHUB_OUTPUT"
+          echo "tmp_db=${TMP_DB}"     >> "$GITHUB_OUTPUT"
+          echo "tmp_data=${TMP_DATA}" >> "$GITHUB_OUTPUT"
+
+      - name: Build synthetic klines fixture
+        run: |
+          python scripts/ci/build_synthetic_klines_db.py \
+            --db "${{ steps.tmp.outputs.tmp_db }}" \
+            --symbol BTCUSDT \
+            --interval 1h \
+            --rows 1000
+
+      - name: Backup klines to Parquet
+        run: |
+          python scripts/backup_klines_to_parquet.py \
+            --db "${{ steps.tmp.outputs.tmp_db }}" \
+            --out-root "${{ steps.tmp.outputs.tmp_data }}"
+
+      - name: Verify Parquet backup matches SQLite
+        run: |
+          python scripts/verify_klines_backup.py \
+            --db "${{ steps.tmp.outputs.tmp_db }}" \
+            --out-root "${{ steps.tmp.outputs.tmp_data }}"
+
+      - name: Purge legacy artifacts (from temp dir to avoid touching workspace)
+        working-directory: ${{ steps.tmp.outputs.tmp_dir }}
+        run: |
+          python "${GITHUB_WORKSPACE}/scripts/purge_legacy_artifacts.py" \
+            --db "${{ steps.tmp.outputs.tmp_db }}" \
+            --require-backup "${{ steps.tmp.outputs.tmp_data }}/_manifest.json" \
+            --yes
+
+      - name: Inspect post-purge DB and assert no bt_* tables remain
+        run: |
+          set -e
+          out="$(python scripts/inspect_klines_db.py "${{ steps.tmp.outputs.tmp_db }}")"
+          echo "$out"
+          if echo "$out" | grep -E '^\s-\sbt_' > /dev/null; then
+            echo "::error::bt_* tables still present after purge"
+            exit 1
+          fi
+          if ! echo "$out" | grep -q "klines"; then
+            echo "::error::klines table missing after purge"
+            exit 1
+          fi
+          echo "post-purge inspection OK"

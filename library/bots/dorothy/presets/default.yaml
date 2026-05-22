@@ -1,0 +1,4 @@
+profit_factor: 0.05
+margin_drop_factor: 0.03
+quote_order_qty_usdt: 8.0
+max_rungs: 5

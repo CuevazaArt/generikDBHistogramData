@@ -1,7 +1,9 @@
 """Data feed utilities backed by local SQLite klines (with optional Parquet cache)."""
+import glob
+import json
 import os
 from dataclasses import dataclass
-from typing import Dict, Iterable, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
 
 from db import iter_query_klines, query_klines
 
@@ -170,4 +172,130 @@ def iter_candles_chunked(
         if bucket:
             yield bucket
         cursor = chunk_end + 1
+
+
+def _glob_partition_files(parquet_root: str, symbol: str, interval: str) -> List[str]:
+    """Return Parquet part files for (symbol, interval), ordered chronologically.
+
+    Layout follows :class:`backtest.storage_paths.StoragePaths.klines_partition`:
+
+        <parquet_root>/symbol=<S>/interval=<I>/year=YYYY/month=MM/part-000.parquet
+
+    A best-effort consult of ``<parquet_root>/_manifest.json`` is used when
+    available so we benefit from the migration tool's deterministic ordering;
+    otherwise we fall back to ``glob.glob`` + lexicographic sort (the
+    ``year=YYYY/month=MM`` naming sorts correctly as strings).
+    """
+    root = os.fspath(parquet_root)
+    manifest_path = os.path.join(root, "_manifest.json")
+    rel_files: List[str] = []
+    if os.path.isfile(manifest_path):
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as fh:
+                manifest = json.load(fh)
+        except (OSError, ValueError):
+            manifest = None
+        if isinstance(manifest, dict):
+            for series in manifest.get("series") or []:
+                if (
+                    str(series.get("symbol") or "") != symbol
+                    or str(series.get("interval") or "") != interval
+                ):
+                    continue
+                for part in series.get("partitions") or []:
+                    rel = part.get("path")
+                    if rel:
+                        rel_files.append(os.path.join(root, str(rel)))
+                break
+    if not rel_files:
+        pattern = os.path.join(
+            root,
+            f"symbol={symbol}",
+            f"interval={interval}",
+            "year=*",
+            "month=*",
+            "part-*.parquet",
+        )
+        rel_files = sorted(glob.glob(pattern))
+    # Filter to existing paths; the manifest may reference partitions that
+    # were pruned offline.
+    return [p for p in rel_files if os.path.isfile(p)]
+
+
+def iter_candles_arrow_batches(
+    parquet_root: str,
+    symbol: str,
+    interval: str,
+    start_ts: Optional[int] = None,
+    end_ts: Optional[int] = None,
+    batch_size: int = 65536,
+) -> Iterator[List[Dict[str, Any]]]:
+    """Yield candle batches read from the Parquet kline lake.
+
+    The lake layout mirrors :class:`backtest.storage_paths.StoragePaths`:
+
+        ``<parquet_root>/symbol=<S>/interval=<I>/year=YYYY/month=MM/part-000.parquet``
+
+    Each yielded element is a ``list[dict]`` of up to ``batch_size`` candles.
+    The ``[start_ts, end_ts]`` window is inclusive at both ends; when both
+    bounds are ``None`` the entire series is emitted.
+
+    Falls back to the SQLite iterator (``iter_candles``) when pyarrow is
+    unavailable; the fallback uses ``BACKTEST_SQLITE_PATH`` env (defaulting
+    to ``klines.db``) so callers that do not pre-materialise Parquet still
+    work in tests.
+    """
+    try:
+        import pyarrow.parquet as pq  # type: ignore[import-not-found]
+    except ImportError:
+        # Fallback: pull rows from SQLite and chunk into batches manually.
+        db_path = os.getenv("BACKTEST_SQLITE_PATH", "klines.db")
+        bucket: List[Dict[str, Any]] = []
+        for candle in iter_candles(
+            db_path,
+            symbol=symbol,
+            interval=interval,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            fetch_size=batch_size,
+        ):
+            bucket.append(candle.to_dict())
+            if len(bucket) >= batch_size:
+                yield bucket
+                bucket = []
+        if bucket:
+            yield bucket
+        return
+
+    paths = _glob_partition_files(parquet_root, symbol, interval)
+    if not paths:
+        return
+
+    lo = int(start_ts) if start_ts is not None else None
+    hi = int(end_ts) if end_ts is not None else None
+
+    for path in paths:
+        try:
+            pf = pq.ParquetFile(path)
+        except (OSError, ValueError):
+            continue
+        for arrow_batch in pf.iter_batches(batch_size=batch_size):
+            rows = arrow_batch.to_pylist()
+            if lo is None and hi is None:
+                if rows:
+                    yield rows
+                continue
+            kept: List[Dict[str, Any]] = []
+            for row in rows:
+                ts = row.get("open_time")
+                if ts is None:
+                    continue
+                ts_i = int(ts)
+                if lo is not None and ts_i < lo:
+                    continue
+                if hi is not None and ts_i > hi:
+                    continue
+                kept.append(row)
+            if kept:
+                yield kept
 

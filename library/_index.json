@@ -1,0 +1,288 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-05-22T18:04:01.225564+00:00",
+  "entries": [
+    {
+      "name": "anti_louise",
+      "kind": "bot",
+      "version": "1.0.0",
+      "dir": "library/bots/anti_louise",
+      "tags": [
+        "dca-inverse",
+        "spot",
+        "long-only"
+      ],
+      "description": "DCA inversa: aproximación spot al short ladder de Louise (compra en subidas, cierra en caídas).",
+      "entry_point": "backtest.strategies:AntiLouiseStrategy",
+      "registry_aliases": [],
+      "reference_only": false,
+      "notes_file": "notes.md",
+      "preset_dir": "presets",
+      "presets": [
+        "default"
+      ]
+    },
+    {
+      "name": "anti_louise_lucky",
+      "kind": "bot",
+      "version": "1.0.0",
+      "dir": "library/bots/anti_louise_lucky",
+      "tags": [
+        "dca-inverse",
+        "spot",
+        "lucky-strike"
+      ],
+      "description": "Variante de anti_louise con entradas oportunistas en máximos locales.",
+      "entry_point": "backtest.strategies:AntiLouiseLuckyStrategy",
+      "registry_aliases": [],
+      "reference_only": false,
+      "notes_file": "notes.md",
+      "preset_dir": "presets",
+      "presets": [
+        "default"
+      ]
+    },
+    {
+      "name": "dorothy",
+      "kind": "bot",
+      "version": "1.0.0",
+      "dir": "library/bots/dorothy",
+      "tags": [
+        "dca",
+        "long-only",
+        "pecunator",
+        "trend-gated"
+      ],
+      "description": "DCA con escalera de profit, modo Dorothy/Pecunator (long-only spot).",
+      "entry_point": "backtest.strategies:DorothyHubStrategy",
+      "registry_aliases": [
+        "dorothy_hub"
+      ],
+      "reference_only": false,
+      "notes_file": "notes.md",
+      "preset_dir": "presets",
+      "presets": [
+        "default"
+      ]
+    },
+    {
+      "name": "dorothy_legacy",
+      "kind": "bot",
+      "version": "1.0.0",
+      "dir": "library/bots/dorothy_legacy",
+      "tags": [
+        "dca",
+        "long-only",
+        "legacy"
+      ],
+      "description": "Adaptador DCA inspirado en la lógica live original de Dorothy (sin gate de tendencia HA).",
+      "entry_point": "backtest.strategies:DorothyBacktestStrategy",
+      "registry_aliases": [],
+      "reference_only": false,
+      "notes_file": "notes.md",
+      "preset_dir": "presets",
+      "presets": [
+        "default"
+      ]
+    },
+    {
+      "name": "dorothy_live_reference",
+      "kind": "bot",
+      "version": "0.0.1",
+      "dir": "library/bots/dorothy_live_reference",
+      "tags": [
+        "live-reference",
+        "dorothy"
+      ],
+      "description": "Referencia de la lógica live de Dorothy (aportes/dorothy.py). NO ejecutable como bot de backtest.",
+      "entry_point": null,
+      "registry_aliases": [],
+      "reference_only": true,
+      "notes_file": "notes.md",
+      "preset_dir": "presets",
+      "presets": []
+    },
+    {
+      "name": "elphaba",
+      "kind": "bot",
+      "version": "1.0.0",
+      "dir": "library/bots/elphaba",
+      "tags": [
+        "dca-inverse",
+        "pecunator",
+        "trend-gated"
+      ],
+      "description": "DCA inversa: trata cada compra spot como anclaje de un short simulado mientras el gate HA esté BEARISH.",
+      "entry_point": "backtest.strategies:ElphabaHubStrategy",
+      "registry_aliases": [
+        "elphaba_hub"
+      ],
+      "reference_only": false,
+      "notes_file": "notes.md",
+      "preset_dir": "presets",
+      "presets": [
+        "default"
+      ]
+    },
+    {
+      "name": "ha_trend",
+      "kind": "bot",
+      "version": "1.0.0",
+      "dir": "library/bots/ha_trend",
+      "tags": [
+        "heikin-ashi",
+        "trend",
+        "pecunator"
+      ],
+      "description": "Trade del cruce de medias HA con modo direccional configurable (both/long/short).",
+      "entry_point": "backtest.strategies:HeikinAshiTrendStrategy",
+      "registry_aliases": [],
+      "reference_only": false,
+      "notes_file": "notes.md",
+      "preset_dir": "presets",
+      "presets": [
+        "default"
+      ]
+    },
+    {
+      "name": "louise",
+      "kind": "bot",
+      "version": "1.0.0",
+      "dir": "library/bots/louise",
+      "tags": [
+        "dca",
+        "long-only",
+        "tp-promedio"
+      ],
+      "description": "DCA downside con take-profit basado en precio promedio (average-price TP).",
+      "entry_point": "backtest.strategies:LouiseStrategy",
+      "registry_aliases": [],
+      "reference_only": false,
+      "notes_file": "notes.md",
+      "preset_dir": "presets",
+      "presets": [
+        "default"
+      ]
+    },
+    {
+      "name": "louise_lucky",
+      "kind": "bot",
+      "version": "1.0.0",
+      "dir": "library/bots/louise_lucky",
+      "tags": [
+        "dca",
+        "long-only",
+        "lucky-strike"
+      ],
+      "description": "Variante de Louise con entradas oportunistas en mínimos locales (lucky strikes).",
+      "entry_point": "backtest.strategies:LouiseLuckyStrategy",
+      "registry_aliases": [],
+      "reference_only": false,
+      "notes_file": "notes.md",
+      "preset_dir": "presets",
+      "presets": [
+        "default"
+      ]
+    },
+    {
+      "name": "masha",
+      "kind": "bot",
+      "version": "1.0.0",
+      "dir": "library/bots/masha",
+      "tags": [
+        "trend-follow",
+        "pullback",
+        "long-only"
+      ],
+      "description": "Trend follow + pullback entries con take-profit y stop-loss fijos.",
+      "entry_point": "backtest.strategies:MashaStrategy",
+      "registry_aliases": [],
+      "reference_only": false,
+      "notes_file": "notes.md",
+      "preset_dir": "presets",
+      "presets": [
+        "default"
+      ]
+    },
+    {
+      "name": "masha_live_reference",
+      "kind": "bot",
+      "version": "0.0.1",
+      "dir": "library/bots/masha_live_reference",
+      "tags": [
+        "live-reference",
+        "masha"
+      ],
+      "description": "Referencia de la lógica live de Masha (aportes/masha.py). NO ejecutable como bot de backtest.",
+      "entry_point": null,
+      "registry_aliases": [],
+      "reference_only": true,
+      "notes_file": "notes.md",
+      "preset_dir": "presets",
+      "presets": []
+    },
+    {
+      "name": "sma_cross",
+      "kind": "bot",
+      "version": "1.0.0",
+      "dir": "library/bots/sma_cross",
+      "tags": [
+        "trend",
+        "long-only",
+        "baseline"
+      ],
+      "description": "Cruce clásico de SMAs (fast/slow) sobre price_source.",
+      "entry_point": "backtest.strategies:SmaCrossStrategy",
+      "registry_aliases": [],
+      "reference_only": false,
+      "notes_file": "notes.md",
+      "preset_dir": "presets",
+      "presets": [
+        "default"
+      ]
+    },
+    {
+      "name": "thusnelda",
+      "kind": "bot",
+      "version": "0.1.0",
+      "dir": "library/bots/thusnelda",
+      "tags": [
+        "placeholder",
+        "wip"
+      ],
+      "description": "Placeholder/reserva para futura integración del adaptador Thusnelda.",
+      "entry_point": "backtest.strategies:ThusneldaPlaceholderStrategy",
+      "registry_aliases": [],
+      "reference_only": false,
+      "notes_file": "notes.md",
+      "preset_dir": "presets",
+      "presets": [
+        "default"
+      ]
+    },
+    {
+      "name": "thusnelda_live_reference",
+      "kind": "bot",
+      "version": "0.0.1",
+      "dir": "library/bots/thusnelda_live_reference",
+      "tags": [
+        "live-reference",
+        "thusnelda"
+      ],
+      "description": "Referencia de la lógica live de Thusnelda (aportes/thusnelda.py). NO ejecutable como bot de backtest.",
+      "entry_point": null,
+      "registry_aliases": [],
+      "reference_only": true,
+      "notes_file": "notes.md",
+      "preset_dir": "presets",
+      "presets": []
+    }
+  ],
+  "counts": {
+    "total": 14,
+    "bots": 14,
+    "indicators": 0,
+    "tools": 0,
+    "reference_only": 3
+  }
+}

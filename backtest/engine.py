@@ -1,6 +1,7 @@
 """Core backtesting engine."""
+import os
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple, Type
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Type
 
 from backtest.broker import SpotBroker
 from backtest.data_feed import candles_to_dicts, load_candles
@@ -12,6 +13,12 @@ from backtest.transforms import apply_candle_source, apply_heikin_ashi
 
 
 _EVENTS_MODES = ("full", "lite", "minimal")
+
+# Engine identity baked into every checkpoint. Bump when the loop semantics
+# change in a way that would invalidate older checkpoints; the resume path
+# can then refuse to load incompatible files.
+ENGINE_KIND_PYTHON = "python"
+ENGINE_VERSION = "0.2.0"
 
 
 @dataclass
@@ -41,6 +48,20 @@ class EngineConfig:
     snapshot_seconds: int = 3600
     # Optional warm-start snapshot for broker/strategy state.
     initial_state: Optional[Dict[str, Any]] = None
+    # --- Fase 2: checkpointing knobs (all None preserves the legacy fast path) ---
+    # Emit a checkpoint every N processed bars (None disables bar-based triggering).
+    checkpoint_every_bars: Optional[int] = None
+    # Emit a checkpoint every N seconds of simulated time elapsed
+    # (None disables time-based triggering). Both triggers may run; we
+    # emit whenever either threshold fires.
+    checkpoint_every_sim_seconds: Optional[int] = None
+    # Filesystem directory that will receive ``cp_<sim_ts>.json`` files.
+    # Required when any ``checkpoint_every_*`` is set; otherwise ignored.
+    checkpoints_dir: Optional[str] = None
+    # Absolute path to a checkpoint file to resume from. When set, the
+    # engine restores broker/strategy state, replays ``seq`` / clamps, and
+    # skips candles up to (and including) ``candle_offset``.
+    resume_from_checkpoint: Optional[str] = None
 
 
 @dataclass
@@ -154,12 +175,136 @@ def run_backtest(
     snapshot_step_ms = max(1, int(config.snapshot_seconds)) * 1000
     last_snapshot_ts: Optional[int] = None
 
+    # --- Fase 2: checkpoint state ----------------------------------------
+    # Decoupled from the legacy fast path: when all of these are None the
+    # branch below is never entered and the loop is byte-identical to the
+    # pre-Fase-2 behaviour. The no-regression test pins that property.
+    cp_every_bars = (
+        int(config.checkpoint_every_bars)
+        if config.checkpoint_every_bars is not None and int(config.checkpoint_every_bars) > 0
+        else None
+    )
+    cp_every_sim_seconds = (
+        int(config.checkpoint_every_sim_seconds)
+        if config.checkpoint_every_sim_seconds is not None and int(config.checkpoint_every_sim_seconds) > 0
+        else None
+    )
+    cp_dir = config.checkpoints_dir if (cp_every_bars or cp_every_sim_seconds) else None
+    checkpointing_enabled = cp_dir is not None and (
+        cp_every_bars is not None or cp_every_sim_seconds is not None
+    )
+    bars_since_cp = 0
+    last_checkpoint_sim_ts: Optional[int] = None
+
+    # --- Fase 2: resume support ------------------------------------------
+    skip_until_index: int = -1
+    if config.resume_from_checkpoint:
+        # Local import keeps `backtest.checkpoint` out of the hot import
+        # graph for callers that never resume.
+        from backtest.checkpoint import read_checkpoint
+
+        cp = read_checkpoint(config.resume_from_checkpoint)
+        broker_state = cp.broker_state or {}
+        broker.state.cash = float(broker_state.get("cash", broker.state.cash))
+        broker.state.position_qty = max(
+            0.0, float(broker_state.get("position_qty", broker.state.position_qty))
+        )
+        broker.state.avg_entry = max(
+            0.0, float(broker_state.get("avg_entry", broker.state.avg_entry))
+        )
+        if broker.state.position_qty <= 0:
+            broker.state.avg_entry = 0.0
+        if isinstance(cp.strategy_state, dict):
+            strategy.import_state(cp.strategy_state)
+        seq = int(cp.seq)
+        last_exec_ts = cp.last_exec_ts
+        last_snapshot_ts = cp.last_snapshot_ts
+        last_trade_entry = cp.last_trade_entry
+        skip_until_index = int(cp.candle_offset)
+        # Audit row in the events list so downstream readers can see the
+        # resume point inline with the rest of the run history.
+        next_idx = skip_until_index + 1
+        if 0 <= next_idx < len(candles):
+            resume_px = float(
+                candles[next_idx].get("price_source", candles[next_idx]["close"])
+            )
+        else:
+            resume_px = 0.0
+        resume_equity = float(broker.mark_equity(resume_px))
+        seq += 1
+        events.append(
+            Event(
+                seq=seq,
+                event_time=int(cp.sim_ts),
+                event_type="resume",
+                cash=float(broker.state.cash),
+                equity=resume_equity,
+                position_qty=float(broker.state.position_qty),
+                payload={
+                    "checkpoint_path": str(config.resume_from_checkpoint),
+                    "candle_offset": int(cp.candle_offset),
+                    "engine_kind": cp.engine_kind,
+                    "engine_version": cp.engine_version,
+                },
+            ).to_record()
+        )
+
     for i, candle in enumerate(candles):
+        if skip_until_index >= 0 and i <= skip_until_index:
+            continue
         candle_ts = int(candle["open_time"])
         if config.loop_seconds is not None and config.loop_seconds > 0 and last_exec_ts is not None:
             if candle_ts - last_exec_ts < int(config.loop_seconds) * 1000:
                 continue
         last_exec_ts = candle_ts
+        # --- Fase 2 checkpoint trigger ----------------------------------
+        # Threshold evaluation happens BEFORE the bar's signal is generated
+        # so the snapshot captures the broker/strategy state that has
+        # already been persisted (i.e. fills from previous bars). On resume
+        # we re-enter the loop at candle_offset + 1 with that exact state.
+        if checkpointing_enabled:
+            bars_since_cp += 1
+            bar_due = cp_every_bars is not None and bars_since_cp >= cp_every_bars
+            time_due = False
+            if cp_every_sim_seconds is not None:
+                if last_checkpoint_sim_ts is None:
+                    # Use the first observed bar to anchor the time clock
+                    # without emitting a checkpoint for it; otherwise we'd
+                    # always write a no-op checkpoint at offset -1.
+                    last_checkpoint_sim_ts = int(candle_ts)
+                elif (candle_ts - last_checkpoint_sim_ts) >= int(cp_every_sim_seconds) * 1000:
+                    time_due = True
+            if bar_due or time_due:
+                # Local import to avoid circular dependency at module load.
+                from backtest.checkpoint import Checkpoint, write_checkpoint
+
+                # i here is the 0-based offset of the bar we just decided
+                # to process. We persist BEFORE the strategy runs, so on
+                # resume we re-enter at i (the same bar) -- but we record
+                # candle_offset = i - 1 so the resume slice
+                # `candles[candle_offset + 1:]` reproduces this bar.
+                offset = i - 1
+                cp = Checkpoint(
+                    run_id=int(run_id) if run_id is not None else -1,
+                    sim_ts=int(candle_ts),
+                    candle_offset=offset,
+                    broker_state={
+                        "cash": float(broker.state.cash),
+                        "position_qty": float(broker.state.position_qty),
+                        "avg_entry": float(broker.state.avg_entry),
+                    },
+                    strategy_state=strategy.export_state() or {},
+                    seq=int(seq),
+                    last_exec_ts=last_exec_ts,
+                    last_snapshot_ts=last_snapshot_ts,
+                    last_trade_entry=last_trade_entry,
+                    engine_kind=ENGINE_KIND_PYTHON,
+                    engine_version=ENGINE_VERSION,
+                )
+                target = os.path.join(cp_dir, f"cp_{int(candle_ts)}.json")
+                write_checkpoint(target, cp)
+                last_checkpoint_sim_ts = int(candle_ts)
+                bars_since_cp = 0
         px = float(candle.get("price_source", candle["close"]))
         equity = broker.mark_equity(px)
         equity_curve.append(equity)
@@ -276,3 +421,51 @@ def run_backtest(
         final_state=final_state,
     )
 
+
+def run_backtest_streaming(
+    config: EngineConfig,
+    strategy_cls: Type[StrategyBase],
+    strategy_params: Optional[Dict] = None,
+    candle_batch_iter: Optional[Iterator[List[Dict]]] = None,
+    run_id: Optional[int] = None,
+    trial_id: Optional[int] = None,
+) -> BacktestResult:
+    """Run a backtest over an iterator of candle batches.
+
+    This is the seam Fase 3 will pull against when wiring true Arrow-batch
+    streaming through the engine. For now the implementation accumulates the
+    yielded batches into a single in-memory ``candles`` list and delegates
+    to :func:`run_backtest`, so the numerical output is byte-identical to the
+    legacy code path (a `streaming_matches_in_memory` test pins that).
+
+    Callers that need a streamed source should use
+    :func:`backtest.data_feed.iter_candles_arrow_batches` (Parquet-backed)
+    or any iterator that yields ``list[dict]``-shaped chunks.
+    """
+    if candle_batch_iter is None:
+        # Caller wants the legacy load path; passing candles=None to
+        # `run_backtest` triggers DB loading.
+        return run_backtest(
+            config=config,
+            strategy_cls=strategy_cls,
+            strategy_params=strategy_params,
+            run_id=run_id,
+            trial_id=trial_id,
+            candles=None,
+        )
+    candles: List[Dict] = []
+    for batch in candle_batch_iter:
+        if not batch:
+            continue
+        candles.extend(batch)
+    # When the iterator was explicitly provided, always honour it: pass
+    # the accumulated list (possibly empty) so we never accidentally fall
+    # back to DB loading on a zero-batch stream.
+    return run_backtest(
+        config=config,
+        strategy_cls=strategy_cls,
+        strategy_params=strategy_params,
+        run_id=run_id,
+        trial_id=trial_id,
+        candles=candles,
+    )

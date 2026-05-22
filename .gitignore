@@ -15,3 +15,19 @@ venv/
 logs/
 reports/
 .backtest_menu_settings.json
+
+# New layout (greenfield redesign)
+data/
+target/
+*.so
+*.dll
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+build/
+dist/
+wheels/
+.benchmarks/
+.coverage
+htmlcov/

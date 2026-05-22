@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -35,6 +36,33 @@ from backtest.storage import (
     summarize_run,
 )
 from backtest.sweet_spot import SweetSpotResult
+
+
+def _load_via_duckdb(
+    run_id: int, data_root: str = "data"
+) -> Optional[Dict[str, List[Tuple]]]:
+    """Return equity/signal/event rows from Parquet, or ``None`` to fall back.
+
+    The shapes match what ``backtest.storage`` returns from SQLite so the
+    rest of :func:`build_unified_report` is backend agnostic. ``None`` means
+    the Parquet artefacts are missing or DuckDB is not installed; the caller
+    should then read from SQLite as before.
+    """
+    try:
+        from backtest import duckdb_reads
+    except ImportError:
+        return None
+    if not duckdb_reads.is_available():
+        return None
+    if not duckdb_reads.has_equity_parquet(int(run_id), data_root):
+        return None
+    try:
+        eq_rows = duckdb_reads.equity_curve_from_parquet(int(run_id), data_root=data_root)
+        sig_rows = duckdb_reads.signal_events_from_parquet(int(run_id), data_root=data_root)
+        ev_rows = duckdb_reads.run_events_from_parquet(int(run_id), data_root=data_root)
+    except Exception:
+        return None
+    return {"eq_rows": eq_rows, "sig_rows": sig_rows, "ev_rows": ev_rows}
 
 
 def _ms_to_iso(v: Optional[int]) -> str:
@@ -234,10 +262,20 @@ def build_unified_report(
         summary="Unified report and artifacts for sweet-spot best focused run.",
     )
 
-    # Pull persisted data for the winning run.
-    eq_rows = run_equity_curve(db_path, run_id=run_id)
-    sig_rows = run_signal_events(db_path, run_id=run_id)
-    ev_rows = run_events(db_path, run_id=run_id)
+    # Pull persisted data for the winning run. DuckDB-over-Parquet is tried
+    # first; on miss we fall through to the legacy SQLite path. Metrics and
+    # descriptor still come from the metadata DB regardless of backend.
+    parquet_rows = _load_via_duckdb(run_id, data_root="data")
+    if parquet_rows is not None:
+        eq_rows = parquet_rows["eq_rows"]
+        sig_rows = parquet_rows["sig_rows"]
+        ev_rows = parquet_rows["ev_rows"]
+        print(f"[reports] run_id={run_id} backend=duckdb", file=sys.stderr)
+    else:
+        eq_rows = run_equity_curve(db_path, run_id=run_id)
+        sig_rows = run_signal_events(db_path, run_id=run_id)
+        ev_rows = run_events(db_path, run_id=run_id)
+        print(f"[reports] run_id={run_id} backend=sqlite", file=sys.stderr)
     metrics = summarize_run(db_path, run_id=run_id)["metrics"]
     descriptor = run_descriptor(db_path, run_id=run_id) or {}
     descriptor["first_event_iso_utc"] = _ms_to_iso(descriptor.get("first_event_time"))

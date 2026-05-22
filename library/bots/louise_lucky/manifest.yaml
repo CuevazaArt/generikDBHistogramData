@@ -1,0 +1,29 @@
+schema_version: 1
+name: louise_lucky
+kind: bot
+version: 1.0.0
+author: ""
+description: "Variante de Louise con entradas oportunistas en mínimos locales (lucky strikes)."
+entry_point: "backtest.strategies:LouiseLuckyStrategy"
+registry_aliases: []
+tags: ["dca", "long-only", "lucky-strike"]
+created_at: "2026-05-22T00:00:00Z"
+updated_at: "2026-05-22T00:00:00Z"
+default_params:
+  target_profit_pct: 1.5
+  margin_drop_factor: 0.004
+  quote_order_qty_usdt: 8.0
+  lucky_window: 24
+search_space:
+  target_profit_pct: { type: "float", min: 0.2, max: 5.0 }
+  margin_drop_factor: { type: "float", min: 0.001, max: 0.03 }
+  lucky_window: { type: "int", min: 8, max: 72 }
+data_requirements:
+  symbols: ["*"]
+  intervals: ["1m", "1h"]
+  required_columns: ["open", "high", "low", "close", "volume"]
+  derived_columns: ["ha_low", "pec_trend"]
+data_contributions:
+  derived_dataset: null
+notes_file: "notes.md"
+preset_dir: "presets"

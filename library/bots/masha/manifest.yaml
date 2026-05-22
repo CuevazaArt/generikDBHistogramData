@@ -1,0 +1,33 @@
+schema_version: 1
+name: masha
+kind: bot
+version: 1.0.0
+author: ""
+description: "Trend follow + pullback entries con take-profit y stop-loss fijos."
+entry_point: "backtest.strategies:MashaStrategy"
+registry_aliases: []
+tags: ["trend-follow", "pullback", "long-only"]
+created_at: "2026-05-22T00:00:00Z"
+updated_at: "2026-05-22T00:00:00Z"
+default_params:
+  fast: 9
+  slow: 34
+  quote_order_qty_usdt: 8.0
+  take_profit_pct: 1.5
+  stop_loss_pct: 4.0
+  pullback_factor: 0.006
+search_space:
+  fast: { type: "int", min: 5, max: 30 }
+  slow: { type: "int", min: 20, max: 120 }
+  take_profit_pct: { type: "float", min: 0.2, max: 5.0 }
+  stop_loss_pct: { type: "float", min: 1.0, max: 10.0 }
+  pullback_factor: { type: "float", min: 0.001, max: 0.03 }
+data_requirements:
+  symbols: ["*"]
+  intervals: ["1m", "1h"]
+  required_columns: ["open", "high", "low", "close", "volume"]
+  derived_columns: []
+data_contributions:
+  derived_dataset: null
+notes_file: "notes.md"
+preset_dir: "presets"

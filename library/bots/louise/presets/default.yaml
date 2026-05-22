@@ -1,0 +1,3 @@
+target_profit_pct: 1.5
+margin_drop_factor: 0.004
+quote_order_qty_usdt: 8.0

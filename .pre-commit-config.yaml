@@ -1,0 +1,30 @@
+minimum_pre_commit_version: "3.5.0"
+default_language_version:
+  python: python3.11
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: check-toml
+      - id: check-merge-conflict
+
+  - repo: local
+    hooks:
+      - id: compileall-core
+        name: compileall core modules
+        entry: python -m compileall -q backtest db.py cli.py
+        language: system
+        pass_filenames: false
+        files: ^(backtest/.*\.py|db\.py|cli\.py)$

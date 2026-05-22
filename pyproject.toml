@@ -1,0 +1,97 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[tool.maturin]
+manifest-path = "crates/genericbt-core/Cargo.toml"
+module-name = "genericbt_core._genericbt_core"
+python-source = "."
+features = ["pyo3/extension-module"]
+strip = true
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+# Excludes:
+#   - aportes/, imported_bots/: legacy snapshots, not in scope for lint.
+#   - .venv/, venv/, build/, dist/, wheels/: env/build artefacts.
+#   - library/, library/workspace/: bot-library workspace owned by sibling
+#     workers; do not lint until that work lands.
+#   - infra/: PostgreSQL bootstrap owned by sibling worker (Fase 0).
+#   - backtest/migrations/: SQL/Alembic migrations owned by sibling worker.
+#   - backtest/library.py, backtest/data_provider.py, backtest/storage_pg.py,
+#     backtest_cli.py: actively edited by sibling workers — lint after they
+#     finish, then remove from this list.
+extend-exclude = [
+    "aportes",
+    "imported_bots",
+    ".venv",
+    "venv",
+    "build",
+    "dist",
+    "wheels",
+    "library",
+    "library/workspace",
+    "infra",
+    "backtest/migrations",
+    "backtest/library.py",
+    "backtest/data_provider.py",
+    "backtest/storage_pg.py",
+    "backtest_cli.py",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "B", "UP", "RUF"]
+# Globally ignored:
+#   E501 : line too long; the project uses long descriptive strings.
+#   B008 : function-call-in-default-argument; common in argparse helpers.
+#   UP007: typing.Union -> X | Y; legacy modules still use Union, separate
+#          modernization PR scope.
+#   UP006: typing.List -> list, etc.; ~400 occurrences in legacy modules,
+#          deferred to its own typing-migration PR.
+#   UP017: datetime.timezone.utc -> datetime.UTC; same deferral as UP006.
+#   UP035: deprecated typing imports; same deferral as UP006.
+ignore = ["E501", "B008", "UP007", "UP006", "UP017", "UP035"]
+
+[tool.ruff.lint.per-file-ignores]
+# tests/ and scripts/ commonly mutate sys.path before importing (E402) and are
+# concurrently authored by sibling workers, so noisy minor rules are relaxed
+# until the new test/script files settle.
+"tests/*" = ["E402", "I001", "F401", "F811", "F841", "F541", "B904", "B905", "E741", "RUF005", "RUF010"]
+"scripts/*" = ["E402"]
+# Legacy/in-flight modules: keep CI green while sibling workers stabilise
+# them. Drop a path from this list as it gets cleaned up.
+"backtest/**" = ["I001", "F401", "F811", "F841", "F541", "B904", "B905", "E741", "RUF005", "RUF010", "UP015", "UP028", "UP034", "UP037", "UP038"]
+"scripts/**" = ["I001", "F401", "F811", "F841", "F541", "B904", "B905", "E741", "RUF005", "RUF010", "UP015", "UP028", "UP034", "UP037", "UP038"]
+# Keep scripts/ci/** (this PR's own helpers) strict — re-enabled here.
+"scripts/ci/**" = []
+"db.py" = ["I001", "F401", "F811", "F841", "F541", "B904", "B905", "E741", "RUF005", "RUF010", "UP015", "UP028", "UP034", "UP037", "UP038"]
+"cli.py" = ["I001", "F401", "F811", "F841", "F541", "B904", "B905", "E741", "RUF005", "RUF010", "UP015", "UP028", "UP034", "UP037", "UP038"]
+"binance_hist_downloader.py" = ["I001", "F401", "F811", "F841", "F541", "B904", "B905", "E741", "RUF005", "RUF010", "UP015", "UP028", "UP034", "UP037", "UP038"]
+"service.py" = ["I001", "F401", "F811", "F841", "F541", "B904", "B905", "E741", "RUF005", "RUF010", "UP015", "UP028", "UP034", "UP037", "UP038"]
+"reader.py" = ["I001", "F401", "F811", "F841", "F541", "B904", "B905", "E741", "RUF005", "RUF010", "UP015", "UP028", "UP034", "UP037", "UP038"]
+"terminal_ui.py" = ["I001", "F401", "F811", "F841", "F541", "B904", "B905", "E741", "RUF005", "RUF010", "UP015", "UP028", "UP034", "UP037", "UP038"]
+
+# Format applies only to files this PR (and future PRs) actively authors.
+# Legacy modules and sibling-owned in-flight modules are skipped from format
+# check so reformatting isn't required as a precondition for landing CI.
+# Lint coverage above is unaffected.
+[tool.ruff.format]
+exclude = [
+    "backtest/**/*.py",
+    "tests/**/*.py",
+    "db.py",
+    "cli.py",
+    "service.py",
+    "reader.py",
+    "terminal_ui.py",
+    "binance_hist_downloader.py",
+    "scripts/backup_klines_to_parquet.py",
+    "scripts/inspect_klines_db.py",
+    "scripts/migrate_to_pg.py",
+    "scripts/pg_init.py",
+    "scripts/purge_legacy_artifacts.py",
+    "scripts/verify_klines_backup.py",
+    "scripts/run_xrpusdt_2024_dorothy_strict.py",
+    "scripts/launch_xrpusdt_2024_dorothy_pf_parallel.py",
+]
