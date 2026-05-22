@@ -1,0 +1,10 @@
+---
+description: Prefer single-agent execution; no background subagents unless the user explicitly asks.
+alwaysApply: true
+---
+
+# Single-agent mode (project default)
+
+- Do **not** use the Task tool or `/multitask` to spawn parallel background subagents.
+- Work sequentially in the main agent: read, edit, run commands, report results.
+- Only delegate to a subagent if the user explicitly requests multitask, parallel agents, or a background worker.
