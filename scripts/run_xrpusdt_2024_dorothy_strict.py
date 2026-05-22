@@ -5,9 +5,10 @@ import json
 import math
 import os
 import sqlite3
+import sys
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from backtest.cleanup import abort_stale_runs
 from backtest.engine import EngineConfig
@@ -52,6 +53,55 @@ def _build_profit_grid(raw: str | None) -> list[float]:
     return [float(v) for v in unique]
 
 
+def _build_margin_grid(args: argparse.Namespace) -> List[float]:
+    raw = getattr(args, "margin_drop_grid", None)
+    if raw:
+        return _build_profit_grid(str(raw))
+    return [float(args.margin_drop_factor)]
+
+
+def _param_combos(profit_values: List[float], margin_values: List[float]) -> List[Dict[str, float]]:
+    combos: List[Dict[str, float]] = []
+    for margin in margin_values:
+        for pf in profit_values:
+            combos.append({"profit_factor": float(pf), "margin_drop_factor": float(margin)})
+    return combos
+
+
+def _configure_compute_threads(cpu_cap_pct: float) -> int:
+    """Let numpy/OpenBLAS use multiple cores during indicator passes."""
+    n = os.cpu_count() or 4
+    threads = n if float(cpu_cap_pct) >= 99.0 else max(1, int(n * float(cpu_cap_pct) / 100.0))
+    for key in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+        os.environ[key] = str(threads)
+    return threads
+
+
+def _strict_chain_job(job: Dict[str, Any]) -> Dict[str, Any]:
+    """Picklable worker: one full chained run for a single (profit_factor, margin_drop) combo."""
+    root = str(job["project_root"])
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    os.chdir(root)
+    args = argparse.Namespace(**job["args_ns"])
+    _configure_compute_threads(float(job.get("cpu_cap_pct", 100.0)))
+    strategy_cls = get_strategy("dorothy")
+    guard = _guard_from_args(args)
+    guard_events: List[Dict[str, Any]] = []
+    strategy_params = dict(job["strategy_params"])
+    strategy_params["quote_order_qty_usdt"] = float(job["quote_order_qty_usdt"])
+    strategy_params["max_rungs"] = int(job["max_rungs"])
+    return _run_chain_for_profit_factor(
+        args=args,
+        strategy_cls=strategy_cls,
+        execution_windows=list(job["execution_windows"]),
+        strategy_params=strategy_params,
+        guard=guard,
+        guard_events=guard_events,
+        chain_seed_state=job.get("chain_seed"),
+    )
+
+
 def _quarter_windows_2024() -> List[Tuple[str, int, int]]:
     return [
         ("Q1", 1704067200000, 1711929599000),
@@ -62,6 +112,61 @@ def _quarter_windows_2024() -> List[Tuple[str, int, int]]:
 
 
 _MS_PER_DAY = 24 * 60 * 60 * 1000
+
+# XRPUSDT 1s 2024 monthly bounds (from data/klines manifests).
+_MONTH_WINDOWS_2024_1S: List[Tuple[str, int, int]] = [
+    ("M01", 1704067200000, 1706745599000),
+    ("M02", 1706745600000, 1709251199000),
+    ("M03", 1709251200000, 1711929599000),
+    ("M04", 1711929600000, 1714521599000),
+    ("M05", 1714521600000, 1717199999000),
+    ("M06", 1717200000000, 1719791999000),
+    ("M07", 1719792000000, 1722470399000),
+    ("M08", 1722470400000, 1725148799000),
+    ("M09", 1725148800000, 1727740799000),
+    ("M10", 1727740800000, 1730419199000),
+    ("M11", 1730419200000, 1733011199000),
+    ("M12", 1733011200000, 1735689599000),
+]
+
+
+def _monthly_windows(
+    start_ts: int,
+    end_ts: int,
+    from_month: int = 1,
+    through_month: int = 12,
+) -> List[Tuple[str, int, int]]:
+    """Calendar months for 2024 clipped to [start_ts, end_ts]."""
+    windows: List[Tuple[str, int, int]] = []
+    for name, m_start, m_end in _MONTH_WINDOWS_2024_1S:
+        month_num = int(name[1:])
+        if month_num < int(from_month) or month_num > int(through_month):
+            continue
+        if m_end < start_ts or m_start > end_ts:
+            continue
+        windows.append((name, max(m_start, start_ts), min(m_end, end_ts)))
+    if not windows:
+        raise ValueError("No monthly windows overlap the requested range")
+    return windows
+
+
+def _load_seed_state(db_path: str, run_id: int) -> Dict[str, Any]:
+    """Restore broker/strategy state saved in bt_metrics.extra_json.final_state."""
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT extra_json FROM bt_metrics WHERE run_id = ? LIMIT 1",
+            (int(run_id),),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row or not row[0]:
+        raise ValueError(f"No metrics/extra_json found for run_id={run_id}")
+    extra = json.loads(row[0])
+    state = extra.get("final_state")
+    if not isinstance(state, dict):
+        raise ValueError(f"run_id={run_id} extra_json has no final_state dict")
+    return state
 
 
 def _execution_windows(start_ts: int, end_ts: int) -> List[Tuple[str, int, int]]:
@@ -164,8 +269,9 @@ def _run_chain_for_profit_factor(
     strategy_params: Dict[str, Any],
     guard: ResourceGuard,
     guard_events: List[Dict[str, Any]],
+    chain_seed_state: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    state: Dict[str, Any] | None = None
+    state: Dict[str, Any] | None = dict(chain_seed_state) if chain_seed_state else None
     quarter_runs: List[Dict[str, Any]] = []
     for quarter_name, q_start, q_end in execution_windows:
         _guard_wait_if_needed(
@@ -279,13 +385,29 @@ def _write_log_markdown(path: str, payload: Dict[str, Any]) -> None:
 
 
 def run(args: argparse.Namespace) -> None:
-    execution_windows = _execution_windows(int(args.start_ts), int(args.end_ts))
+    if bool(getattr(args, "chain_by_month", False)):
+        execution_windows = _monthly_windows(
+            int(args.start_ts),
+            int(args.end_ts),
+            from_month=int(args.from_month),
+            through_month=int(args.through_month),
+        )
+    else:
+        execution_windows = _execution_windows(int(args.start_ts), int(args.end_ts))
     profit_values = _build_profit_grid(args.profit_factor_grid)
+    margin_values = _build_margin_grid(args)
+    param_combos = _param_combos(profit_values, margin_values)
     quote_order_qty = 8.0
-    max_rungs = min(200, math.floor(args.initial_cash / quote_order_qty))
+    max_rungs_arg = getattr(args, "max_rungs", None)
+    if max_rungs_arg is None:
+        max_rungs = min(200, math.floor(args.initial_cash / quote_order_qty))
+    elif int(max_rungs_arg) <= 0:
+        max_rungs = 0  # unlimited (see DorothyHubStrategy)
+    else:
+        max_rungs = min(int(max_rungs_arg), math.floor(args.initial_cash / quote_order_qty))
     window_candles = _count_candles(args.db, args.symbol, args.interval, args.start_ts, args.end_ts)
     resources = _decide_resource_cap(
-        combo_count=len(profit_values), dataset_candles=window_candles, cpu_cap_pct=args.cpu_cap_pct
+        combo_count=len(param_combos), dataset_candles=window_candles, cpu_cap_pct=args.cpu_cap_pct
     )
 
     if bool(getattr(args, "explain_only", False)):
@@ -297,11 +419,19 @@ def run(args: argparse.Namespace) -> None:
             "window_candle_count": window_candles,
             "execution_windows": execution_windows,
             "profit_factor_grid": profit_values,
+            "margin_drop_grid": margin_values,
+            "param_combos": param_combos,
             "max_rungs": max_rungs,
             "resource_plan": resources,
             "workload_estimate": estimate_workload(
                 dataset_candles=window_candles,
-                n_trials=len(profit_values) * len(execution_windows),
+                n_trials=len(param_combos) * len(execution_windows),
+            ),
+            "executor": getattr(args, "executor", "serial"),
+            "n_jobs": getattr(args, "n_jobs", 1),
+            "note": (
+                "Los meses dentro de cada combo se encadenan en serie (estado DCA). "
+                "Paralelismo solo entre combos distintos de la malla."
             ),
         }
         print(json.dumps(explain, ensure_ascii=False, indent=2))
@@ -311,7 +441,26 @@ def run(args: argparse.Namespace) -> None:
     guard = _guard_from_args(args)
     guard_events: List[Dict[str, Any]] = []
 
-    mode_tag = "month" if len(execution_windows) == 1 and execution_windows[0][0] == "MONTH" else "chain"
+    chain_seed: Optional[Dict[str, Any]] = None
+    seed_run_id = getattr(args, "seed_run_id", None)
+    if seed_run_id is not None:
+        chain_seed = _load_seed_state(args.db, int(seed_run_id))
+        print(
+            json.dumps(
+                {
+                    "seed_run_id": int(seed_run_id),
+                    "seed_summary": _state_summary(chain_seed),
+                },
+                ensure_ascii=False,
+            ),
+            flush=True,
+        )
+    if bool(getattr(args, "chain_by_month", False)):
+        mode_tag = "monthly_chain"
+    elif len(execution_windows) == 1 and execution_windows[0][0] == "MONTH":
+        mode_tag = "month"
+    else:
+        mode_tag = "chain"
     study_name = f"dorothy_xrpusdt_1s_{mode_tag}_{_now_tag()}"
     output_dir = strict_report_dir(args.output_root, study_name)
     os.makedirs(output_dir, exist_ok=True)
@@ -322,28 +471,99 @@ def run(args: argparse.Namespace) -> None:
     )
     strategy_cls = get_strategy("dorothy")
     telemetry = TelemetryRecorder(TelemetryConfig(output_dir=output_dir))
-    telemetry.sample(phase="run:start", extra={"profit_grid": profit_values, "max_rungs": max_rungs})
+    telemetry.sample(
+        phase="run:start",
+        extra={"profit_grid": profit_values, "margin_grid": margin_values, "max_rungs": max_rungs},
+    )
+
+    executor = str(getattr(args, "executor", "serial") or "serial").strip().lower()
+    n_jobs = max(1, int(getattr(args, "n_jobs", 1) or 1))
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    args_ns = {k: v for k, v in vars(args).items() if not k.startswith("_")}
 
     candidates: List[Dict[str, Any]] = []
-    for pf in profit_values:
-        params = {
-            "profit_factor": float(pf),
-            "margin_drop_factor": float(args.margin_drop_factor),
-            "quote_order_qty_usdt": float(quote_order_qty),
-            "max_rungs": int(max_rungs),
-        }
-        telemetry.sample(phase=f"pf:{pf}:start")
-        candidates.append(
-            _run_chain_for_profit_factor(
-                args=args,
-                strategy_cls=strategy_cls,
-                execution_windows=execution_windows,
-                strategy_params=params,
-                guard=guard,
-                guard_events=guard_events,
+    if executor != "serial" and len(param_combos) > 1:
+        from backtest.orchestrator import FailureResult, Orchestrator, OrchestratorConfig
+
+        orch = Orchestrator(
+            OrchestratorConfig(
+                executor=executor,
+                n_jobs=n_jobs,
+                ram_cap_pct=float(
+                    args.guard_ram_cap_pct if args.guard_ram_cap_pct is not None else guard.config.ram_cap_pct
+                ),
+                cpu_cap_pct=float(
+                    args.guard_cpu_cap_pct if args.guard_cpu_cap_pct is not None else guard.config.cpu_cap_pct
+                ),
+                per_worker_ram_mb=getattr(args, "per_worker_ram_mb", None),
             )
         )
-        telemetry.sample(phase=f"pf:{pf}:end")
+        jobs = [
+            {
+                "project_root": project_root,
+                "args_ns": args_ns,
+                "execution_windows": execution_windows,
+                "strategy_params": combo,
+                "quote_order_qty_usdt": quote_order_qty,
+                "max_rungs": max_rungs,
+                "chain_seed": chain_seed,
+                "cpu_cap_pct": float(args.cpu_cap_pct),
+            }
+            for combo in param_combos
+        ]
+        print(
+            json.dumps(
+                {
+                    "parallel_combos": len(param_combos),
+                    "executor": executor,
+                    "n_jobs": n_jobs,
+                    "monthly_chain": "serial dentro de cada worker",
+                },
+                ensure_ascii=False,
+            ),
+            flush=True,
+        )
+        results = orch.map(_strict_chain_job, jobs)
+        for combo, result in zip(param_combos, results):
+            if isinstance(result, FailureResult):
+                raise RuntimeError(
+                    f"Combo pf={combo['profit_factor']} margin={combo['margin_drop_factor']} failed: {result.error}"
+                )
+            candidates.append(result)
+    else:
+        threads = _configure_compute_threads(float(args.cpu_cap_pct))
+        print(
+            json.dumps(
+                {
+                    "parallel_combos": 1,
+                    "executor": "serial",
+                    "monthly_chain": "serial M01..M12",
+                    "omp_threads": threads,
+                },
+                ensure_ascii=False,
+            ),
+            flush=True,
+        )
+        for combo in param_combos:
+            params = {
+                **combo,
+                "quote_order_qty_usdt": float(quote_order_qty),
+                "max_rungs": int(max_rungs),
+            }
+            label = f"pf={combo['profit_factor']}_mdf={combo['margin_drop_factor']}"
+            telemetry.sample(phase=f"{label}:start")
+            candidates.append(
+                _run_chain_for_profit_factor(
+                    args=args,
+                    strategy_cls=strategy_cls,
+                    execution_windows=execution_windows,
+                    strategy_params=params,
+                    guard=guard,
+                    guard_events=guard_events,
+                    chain_seed_state=chain_seed,
+                )
+            )
+            telemetry.sample(phase=f"{label}:end")
 
     if not candidates:
         raise RuntimeError("No se genero ningun candidato para evaluar")
@@ -363,6 +583,10 @@ def run(args: argparse.Namespace) -> None:
         "quote_order_qty_usdt": quote_order_qty,
         "max_rungs": max_rungs,
         "profit_factor_grid": profit_values,
+        "margin_drop_grid": margin_values,
+        "param_combos": param_combos,
+        "executor": executor,
+        "n_jobs": n_jobs,
         "resource_plan": resources,
         "resource_guard": {
             "cpu_cap_pct": guard.config.cpu_cap_pct,
@@ -408,7 +632,26 @@ def main() -> None:
     parser.add_argument("--slippage_bps", type=float, default=2.0)
     parser.add_argument("--loop_seconds", type=int, default=29)
     parser.add_argument("--margin_drop_factor", type=float, default=0.0005)
+    parser.add_argument(
+        "--margin-drop-grid",
+        dest="margin_drop_grid",
+        default=None,
+        help="Malla margin_drop (coma). Si se omite, usa --margin_drop_factor.",
+    )
     parser.add_argument("--profit_factor_grid", default="0.01,0.03,0.05,0.06")
+    parser.add_argument(
+        "--executor",
+        choices=["serial", "joblib", "ray"],
+        default="serial",
+        help="Paraleliza solo entre combos de la malla (no entre meses encadenados).",
+    )
+    parser.add_argument("--n-jobs", type=int, default=1, help="Workers para --executor joblib|ray.")
+    parser.add_argument(
+        "--per-worker-ram-mb",
+        type=int,
+        default=None,
+        help="RAM max por worker aislado (orquestador).",
+    )
     parser.add_argument("--cpu_cap_pct", type=float, default=90.0)
     parser.add_argument("--guard_cpu_cap_pct", type=float, default=None)
     parser.add_argument("--guard_ram_cap_pct", type=float, default=None)
@@ -421,6 +664,25 @@ def main() -> None:
         "--explain_only",
         action="store_true",
         help="Print resource/workload estimate and exit without running the chain.",
+    )
+    parser.add_argument(
+        "--chain-by-month",
+        action="store_true",
+        help="Encadena un mes tras otro (M01..M12) en lugar de un solo bloque o trimestres.",
+    )
+    parser.add_argument("--from-month", type=int, default=1, help="Primer mes 2024 (1-12) al usar --chain-by-month.")
+    parser.add_argument("--through-month", type=int, default=12, help="Ultimo mes 2024 (1-12) al usar --chain-by-month.")
+    parser.add_argument(
+        "--seed-run-id",
+        type=int,
+        default=None,
+        help="run_id cuyo final_state inicia la cadena (p.ej. 4 tras enero).",
+    )
+    parser.add_argument(
+        "--max-rungs",
+        type=int,
+        default=None,
+        help="Tope de rungs DCA; 0 o negativo = sin limite. Omitir usa min(200, cash/8).",
     )
     run(parser.parse_args())
 

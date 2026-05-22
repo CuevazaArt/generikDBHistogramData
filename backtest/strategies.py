@@ -148,7 +148,8 @@ class DorothyHubStrategy(StrategyBase):
         self.profit_factor = max(0.0, float(profit_factor))
         self.margin_drop_factor = max(0.0, float(margin_drop_factor))
         self.quote_order_qty_usdt = max(1.0, float(quote_order_qty_usdt))
-        self.max_rungs = max(1, int(max_rungs))
+        # max_rungs <= 0 disables the cap (unlimited DCA rungs for spot backtests).
+        self.max_rungs = int(max_rungs)
         self.active_sell_limits: list[float] = []
 
     def on_start(self, candles):
@@ -175,7 +176,7 @@ class DorothyHubStrategy(StrategyBase):
                     metadata={"hit_limits": len(hit), "remaining_limits": len(self.active_sell_limits)},
                 )
 
-        if len(self.active_sell_limits) >= self.max_rungs:
+        if self.max_rungs > 0 and len(self.active_sell_limits) >= self.max_rungs:
             return Signal(action="hold", reason="max_rungs_reached")
         if ctx.cash < self.quote_order_qty_usdt:
             return Signal(action="hold", reason="insufficient_cash")
