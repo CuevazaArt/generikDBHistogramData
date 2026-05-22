@@ -39,7 +39,7 @@ jobs:
 
       - name: Setup Python ${{ matrix.python-version }}
         if: steps.crate.outputs.present == 'true'
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -82,7 +82,7 @@ jobs:
 
       - name: Setup Python ${{ matrix.python-version }}
         if: steps.crate.outputs.present == 'true'
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
           architecture: ${{ matrix.target == 'x86' && 'x86' || 'x64' }}
@@ -124,7 +124,7 @@ jobs:
 
       - name: Setup Python ${{ matrix.python-version }}
         if: steps.crate.outputs.present == 'true'
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -160,7 +160,7 @@ jobs:
 
       - name: Setup Python 3.11
         if: steps.crate.outputs.present == 'true'
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
