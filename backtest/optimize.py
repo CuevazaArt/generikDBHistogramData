@@ -10,12 +10,18 @@ try:
 except ImportError:  # pragma: no cover - runtime guard
     optuna = None
 
+from backtest.cleanup import abort_stale_runs
 from backtest.engine import EngineConfig
 from backtest.registry import suggest_params
 from backtest.runner import execute_and_persist
 from backtest.storage import save_trial, save_trial_metrics
 from backtest.strategy_base import StrategyBase
 from db import init_db
+
+
+# Default to "lite" persistence during optimization so we don't blow up SQLite
+# when running many trials in parallel on large datasets. Callers can override.
+DEFAULT_OPTIMIZATION_EVENTS_MODE = "lite"
 
 
 AVAILABLE_OBJECTIVE_METRICS = (
@@ -95,10 +101,12 @@ def optimize_strategy(
     timeout: Optional[int] = None,
     search_overrides: Optional[Dict[str, Any]] = None,
     optimization: Optional[OptimizationConfig] = None,
+    events_mode: Optional[str] = None,
 ) -> Any:
     if optuna is None:
         raise RuntimeError("Optuna is not installed. Run: pip install -r requirements.txt")
     init_db(db_path)
+    abort_stale_runs(db_path)
     opt = optimization or OptimizationConfig()
     sampler = _build_sampler(opt.sampler, opt.seed)
     study = optuna.create_study(
@@ -109,6 +117,8 @@ def optimize_strategy(
         sampler=sampler,
     )
 
+    effective_events_mode = (events_mode or DEFAULT_OPTIMIZATION_EVENTS_MODE).strip().lower()
+
     def objective(trial: "optuna.Trial") -> float:
         started_at = _utc_now()
         params = suggest_params(trial, strategy_cls.name, search_overrides=search_overrides)
@@ -117,6 +127,7 @@ def optimize_strategy(
         params = {k: v for k, v in params.items() if not k.startswith("_")}
 
         cfg = EngineConfig(**base_config.__dict__)
+        cfg.events_mode = effective_events_mode
         if strategy_cls.name == "sma_cross":
             cfg.sma_fast = int(params["fast"])
             cfg.sma_slow = int(params["slow"])

@@ -564,6 +564,23 @@ def get_bt_recent_events(path: str, run_id: int, limit: int = 30) -> List[Tuple]
     return rows
 
 
+def get_bt_run_events(path: str, run_id: int) -> List[Tuple]:
+    conn = _connect(path)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT seq, event_time, event_type, side, cash, equity, payload_json
+        FROM bt_events
+        WHERE run_id=?
+        ORDER BY seq ASC
+        """,
+        (int(run_id),),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
 def list_top_bt_trials(path: str, study_name: str, limit: int = 10) -> List[Tuple]:
     conn = _connect(path)
     cur = conn.cursor()

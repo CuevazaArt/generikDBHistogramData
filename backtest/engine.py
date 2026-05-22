@@ -11,6 +11,9 @@ from backtest.strategy_base import StrategyBase, StrategyContext
 from backtest.transforms import apply_candle_source, apply_heikin_ashi
 
 
+_EVENTS_MODES = ("full", "lite", "minimal")
+
+
 @dataclass
 class EngineConfig:
     db_path: str
@@ -29,6 +32,13 @@ class EngineConfig:
     rsi_period: int = 14
     atr_period: int = 14
     loop_seconds: Optional[int] = None
+    # Persistence aggressiveness:
+    #   "full"    -> emit one event per candle (legacy behaviour).
+    #   "lite"    -> emit fills, rejects and periodic equity snapshots only.
+    #   "minimal" -> emit fills and rejects only (no snapshots).
+    events_mode: str = "full"
+    # Used only in "lite" mode: minimum seconds between equity snapshots.
+    snapshot_seconds: int = 3600
 
 
 @dataclass
@@ -101,6 +111,14 @@ def run_backtest(
     last_trade_entry: Optional[Tuple[float, float]] = None
     last_exec_ts: Optional[int] = None
 
+    events_mode = (config.events_mode or "full").strip().lower()
+    if events_mode not in _EVENTS_MODES:
+        events_mode = "full"
+    emit_holds = events_mode == "full"
+    emit_snapshots = events_mode == "lite"
+    snapshot_step_ms = max(1, int(config.snapshot_seconds)) * 1000
+    last_snapshot_ts: Optional[int] = None
+
     for i, candle in enumerate(candles):
         candle_ts = int(candle["open_time"])
         if config.loop_seconds is not None and config.loop_seconds > 0 and last_exec_ts is not None:
@@ -161,19 +179,37 @@ def run_backtest(
                 )
                 events.append(event.to_record())
         else:
-            seq += 1
-            events.append(
-                Event(
-                    seq=seq,
-                    event_time=candle_ts,
-                    event_type="hold",
-                    cash=float(broker.state.cash),
-                    equity=float(equity),
-                    position_qty=float(broker.state.position_qty),
-                    payload={},
-                    trial_id=trial_id,
-                ).to_record()
-            )
+            if emit_holds:
+                seq += 1
+                events.append(
+                    Event(
+                        seq=seq,
+                        event_time=candle_ts,
+                        event_type="hold",
+                        cash=float(broker.state.cash),
+                        equity=float(equity),
+                        position_qty=float(broker.state.position_qty),
+                        payload={},
+                        trial_id=trial_id,
+                    ).to_record()
+                )
+            elif emit_snapshots and (
+                last_snapshot_ts is None or (candle_ts - last_snapshot_ts) >= snapshot_step_ms
+            ):
+                seq += 1
+                events.append(
+                    Event(
+                        seq=seq,
+                        event_time=candle_ts,
+                        event_type="snapshot",
+                        cash=float(broker.state.cash),
+                        equity=float(equity),
+                        position_qty=float(broker.state.position_qty),
+                        payload={},
+                        trial_id=trial_id,
+                    ).to_record()
+                )
+                last_snapshot_ts = candle_ts
 
     strategy.on_finish()
     final_px = float(candles[-1]["price_source"]) if candles else config.initial_cash

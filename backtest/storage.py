@@ -7,6 +7,7 @@ from db import (
     finish_bt_run,
     get_bt_equity_curve,
     get_bt_recent_events,
+    get_bt_run_events,
     get_bt_run_descriptor,
     get_bt_run_events,
     get_bt_run_metrics,
@@ -129,6 +130,10 @@ def run_signal_events(db_path: str, run_id: int) -> List[Tuple]:
 
 def run_descriptor(db_path: str, run_id: int) -> Optional[Dict[str, Any]]:
     return get_bt_run_descriptor(db_path, run_id=run_id)
+
+
+def run_events(db_path: str, run_id: int) -> List[Tuple]:
+    return get_bt_run_events(db_path, run_id=run_id)
 
 
 def study_trials(db_path: str, study_name: str, limit: int = 1000) -> List[Tuple]:

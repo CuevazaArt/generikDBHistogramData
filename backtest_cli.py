@@ -2,11 +2,16 @@
 import argparse
 import datetime as dt
 import json
+import os
 from statistics import mean
 from typing import Optional
 
+from backtest.cleanup import abort_stale_runs, purge_aborted_run_events
 from backtest.engine import EngineConfig
 from backtest.optimize import optimize_strategy
+from backtest.resources import detect_resources, explain_recommendation, recommend_n_jobs
+from backtest.sweet_spot import SweetSpotConfig, run_sweet_spot_search
+from backtest.sweet_spot_report import build_unified_report
 from backtest.plots import (
     export_run_integrated_report,
     export_run_bot_summary,
@@ -37,6 +42,9 @@ from backtest.storage import (
 from db import init_db
 
 
+DEFAULT_N_JOBS = max(1, os.cpu_count() or 1)
+
+
 def _parse_ts(v: Optional[str]) -> Optional[int]:
     if not v:
         return None
@@ -50,6 +58,14 @@ def _ms_to_iso(v: Optional[int]) -> Optional[str]:
         return dt.datetime.fromtimestamp(v / 1000.0, tz=dt.timezone.utc).isoformat()
     except Exception:
         return None
+
+
+def _run_reports_dir(base_output_dir: str, run_id: int) -> str:
+    return os.path.join(base_output_dir, "runs", f"run_{run_id}")
+
+
+def _study_reports_dir(base_output_dir: str, study_name: str) -> str:
+    return os.path.join(base_output_dir, "studies", f"study_{study_name}")
 
 
 def _run_diagnostics(db_path: str, run_id: int) -> dict:
@@ -122,17 +138,19 @@ def _optimize(args: argparse.Namespace) -> None:
         slippage_bps=args.slippage_bps,
         use_heikin_ashi=args.heikin_ashi,
     )
+    n_jobs = int(args.n_jobs) if int(args.n_jobs) > 0 else DEFAULT_N_JOBS
     study = optimize_strategy(
         db_path=args.db,
         study_name=args.study,
         strategy_cls=strategy_cls,
         base_config=cfg,
         trials=args.trials,
-        n_jobs=args.n_jobs,
+        n_jobs=n_jobs,
         timeout=args.timeout,
     )
     print(f"Optimización completa. best_value={study.best_value:.6f}")
     print(f"best_params={study.best_params}")
+    print(f"n_jobs usados: {n_jobs} (cpu_count={DEFAULT_N_JOBS})")
 
 
 def _show(args: argparse.Namespace) -> None:
@@ -163,12 +181,13 @@ def _show(args: argparse.Namespace) -> None:
 
 def _plot(args: argparse.Namespace) -> None:
     if args.run_id is not None:
+        run_output_dir = _run_reports_dir(args.output_dir, args.run_id)
         eq_rows = run_equity_curve(args.db, run_id=args.run_id)
-        paths = plot_equity_and_drawdown(eq_rows, output_dir=args.output_dir, run_id=args.run_id)
+        paths = plot_equity_and_drawdown(eq_rows, output_dir=run_output_dir, run_id=args.run_id)
         signal_rows = run_signal_events(args.db, run_id=args.run_id)
         signal_paths = plot_signal_histograms(
             signal_rows=signal_rows,
-            output_dir=args.output_dir,
+            output_dir=run_output_dir,
             run_id=args.run_id,
             bins=args.signal_bins,
         )
@@ -177,16 +196,16 @@ def _plot(args: argparse.Namespace) -> None:
         descriptor["first_event_iso_utc"] = _ms_to_iso(descriptor.get("first_event_time"))
         descriptor["last_event_iso_utc"] = _ms_to_iso(descriptor.get("last_event_time"))
         descriptor.update(_run_diagnostics(args.db, run_id=args.run_id))
-        spectrum_path = plot_monthly_return_spectrum(eq_rows, output_dir=args.output_dir, run_id=args.run_id)
-        heatmap_path = plot_monthly_return_heatmap(eq_rows, output_dir=args.output_dir, run_id=args.run_id)
+        spectrum_path = plot_monthly_return_spectrum(eq_rows, output_dir=run_output_dir, run_id=args.run_id)
+        heatmap_path = plot_monthly_return_heatmap(eq_rows, output_dir=run_output_dir, run_id=args.run_id)
         activity_heatmap = plot_fill_activity_heatmap(
             run_events(args.db, run_id=args.run_id),
-            output_dir=args.output_dir,
+            output_dir=run_output_dir,
             run_id=args.run_id,
         )
-        export = export_summary(args.output_dir, f"run_{args.run_id}", metrics, eq_rows, descriptor=descriptor)
+        export = export_summary(run_output_dir, f"run_{args.run_id}", metrics, eq_rows, descriptor=descriptor)
         bot_summary_path = export_run_bot_summary(
-            output_dir=args.output_dir,
+            output_dir=run_output_dir,
             file_stem=f"run_{args.run_id}",
             descriptor=descriptor,
             metrics=metrics,
@@ -209,14 +228,14 @@ def _plot(args: argparse.Namespace) -> None:
         if activity_heatmap:
             graph_catalog["fill_activity_heatmap"] = activity_heatmap
         integrated_report_path = export_run_integrated_report(
-            output_dir=args.output_dir,
+            output_dir=run_output_dir,
             file_stem=f"run_{args.run_id}",
             descriptor=descriptor,
             metrics=metrics,
             equity_rows=eq_rows,
             graph_paths=graph_catalog,
         )
-        print("Gráficas y archivos exportados:")
+        print(f"Gráficas y archivos exportados en: {run_output_dir}")
         extra = {}
         if spectrum_path:
             extra["monthly_return_spectrum"] = spectrum_path
@@ -228,20 +247,21 @@ def _plot(args: argparse.Namespace) -> None:
         extra["integrated_report_md"] = integrated_report_path
         print({**paths, **signal_paths, **extra, **export})
     if args.study:
+        study_output_dir = _study_reports_dir(args.output_dir, args.study)
         objective_rows = trial_objectives(args.db, study_name=args.study, limit=1000)
         p = plot_trials(
             trial_rows=objective_rows,
-            output_dir=args.output_dir,
+            output_dir=study_output_dir,
             study_name=args.study,
         )
         summary_paths = export_study_summary_table(
-            output_dir=args.output_dir,
+            output_dir=study_output_dir,
             study_name=args.study,
             trials=study_trials(args.db, study_name=args.study, limit=2000),
         )
         param_heatmap = plot_optuna_param_heatmap(
             trials=study_trials(args.db, study_name=args.study, limit=2000),
-            output_dir=args.output_dir,
+            output_dir=study_output_dir,
             study_name=args.study,
         )
         summary_payload = {}
@@ -251,11 +271,11 @@ def _plot(args: argparse.Namespace) -> None:
         except Exception:
             summary_payload = {}
         optuna_summary_md = export_study_optuna_summary(
-            output_dir=args.output_dir,
+            output_dir=study_output_dir,
             study_name=args.study,
             summary_payload=summary_payload,
         )
-        print("Resumen final de estudio:")
+        print(f"Resumen final de estudio en: {study_output_dir}")
         extra_summary = dict(summary_paths)
         if param_heatmap:
             extra_summary["study_param_heatmap"] = param_heatmap
@@ -265,6 +285,59 @@ def _plot(args: argparse.Namespace) -> None:
             print(f"Gráfica de trials: {p}")
 
 
+def _sweet_spot(args: argparse.Namespace) -> None:
+    profile = detect_resources()
+    print(_build_separator())
+    print("Buscador de seteo dulce - resumen de recursos")
+    print(explain_recommendation(args.mode, profile=profile))
+    print(_build_separator())
+
+    cfg = SweetSpotConfig(
+        db_path=args.db,
+        strategy_name=args.strategy,
+        symbol=args.symbol,
+        interval=args.interval,
+        full_start_ts=int(args.start_ts),
+        full_end_ts=int(args.end_ts),
+        initial_cash=float(args.initial_cash),
+        fee_rate=float(args.fee_rate),
+        slippage_bps=float(args.slippage_bps),
+        use_heikin_ashi=bool(args.heikin_ashi),
+        loop_seconds=int(args.loop_seconds) if args.loop_seconds is not None else None,
+        coarse_window_pct=float(args.coarse_window_pct),
+        coarse_trials=int(args.coarse_trials),
+        coarse_mode=args.mode,
+        coarse_objective_metric=args.objective_metric,
+        coarse_direction=args.direction,
+        coarse_sampler=args.sampler,
+        coarse_seed=int(args.seed) if args.seed is not None else None,
+        focused_top_k=int(args.top_k),
+        focused_mode="safe",
+        focused_events_mode="full",
+    )
+    result = run_sweet_spot_search(cfg, progress_cb=lambda m: print(m))
+    if result.best_focused_run is None:
+        print("No se obtuvo ningun candidato valido en la fase focal.")
+        return
+    bundle = build_unified_report(args.db, result, output_dir=args.output_dir)
+    print(_build_separator())
+    print(f"Reporte unificado: {bundle['report_md']}")
+    print(f"Carpeta del reporte: {bundle['report_dir']}")
+    print(f"Mejor run_id: {bundle['best_run_id']}")
+    print(f"Mejor seteo: {bundle['best_params']}")
+    print(_build_separator())
+
+
+def _cleanup(args: argparse.Namespace) -> None:
+    aborted = abort_stale_runs(args.db)
+    purged = purge_aborted_run_events(args.db) if args.purge_events else {"deleted_events": 0}
+    print({"aborted_runs": aborted["aborted_runs"], **purged})
+
+
+def _build_separator(width: int = 60) -> str:
+    return "-" * width
+
+
 def _menu(db_path: str) -> None:
     while True:
         print("\n=== Backtesting Terminal ===")
@@ -272,7 +345,9 @@ def _menu(db_path: str) -> None:
         print("2) Optimizar estrategia (Optuna)")
         print("3) Ver runs/trials")
         print("4) Graficar run")
-        print("5) Salir")
+        print("5) Buscar seteo dulce (sweet-spot + reporte)")
+        print("6) Limpiar runs colgados")
+        print("7) Salir")
         choice = input("Opción: ").strip()
         if choice == "1":
             symbol = input("Símbolo [BTCUSDT]: ").strip() or "BTCUSDT"
@@ -306,7 +381,7 @@ def _menu(db_path: str) -> None:
             strategy = (input("Estrategia [dorothy|sma_cross] (def dorothy): ").strip() or "dorothy").lower()
             study = input("Study name [sma_opt]: ").strip() or "sma_opt"
             trials = int((input("Trials [30]: ").strip() or "30"))
-            jobs = int((input("n_jobs CPU [2]: ").strip() or "2"))
+            jobs = int((input(f"n_jobs CPU [{DEFAULT_N_JOBS}]: ").strip() or str(DEFAULT_N_JOBS)))
             args = argparse.Namespace(
                 db=db_path,
                 strategy=strategy,
@@ -332,8 +407,41 @@ def _menu(db_path: str) -> None:
             _show(argparse.Namespace(db=db_path, run_id=None, limit=20, study=None, events_limit=25))
         elif choice == "4":
             run_id = int(input("run_id: ").strip())
-            _plot(argparse.Namespace(db=db_path, run_id=run_id, study=None, output_dir="reports"))
+            _plot(argparse.Namespace(db=db_path, run_id=run_id, study=None, output_dir="reports", signal_bins=30))
         elif choice == "5":
+            symbol = input("Símbolo [BTCUSDT]: ").strip() or "BTCUSDT"
+            interval = input("Intervalo [1h]: ").strip() or "1h"
+            strategy = (input("Estrategia [dorothy|sma_cross] (def dorothy): ").strip() or "dorothy").lower()
+            start_ts = input("start_ts (ms UTC, requerido): ").strip()
+            end_ts = input("end_ts (ms UTC, requerido): ").strip()
+            mode = (input("Modo recursos [safe|balanced|max-stable] (def balanced): ").strip() or "balanced").lower()
+            loop_seconds_raw = input("loop_seconds (vacio=desactivado): ").strip()
+            sweet_args = argparse.Namespace(
+                db=db_path,
+                strategy=strategy,
+                symbol=symbol,
+                interval=interval,
+                start_ts=start_ts,
+                end_ts=end_ts,
+                initial_cash=10000.0,
+                fee_rate=0.001,
+                slippage_bps=2.0,
+                heikin_ashi=False,
+                loop_seconds=int(loop_seconds_raw) if loop_seconds_raw else None,
+                mode=mode,
+                coarse_window_pct=0.25,
+                coarse_trials=int((input("trials fase 1 [60]: ").strip() or "60")),
+                top_k=int((input("top_k fase 2 [5]: ").strip() or "5")),
+                objective_metric="total_return",
+                direction="maximize",
+                sampler="tpe",
+                seed=42,
+                output_dir="reports",
+            )
+            _sweet_spot(sweet_args)
+        elif choice == "6":
+            _cleanup(argparse.Namespace(db=db_path, purge_events=False))
+        elif choice == "7":
             break
         else:
             print("Opción inválida.")
@@ -376,7 +484,7 @@ def main() -> None:
     p_opt.add_argument("--slippage_bps", type=float, default=2.0)
     p_opt.add_argument("--heikin_ashi", action="store_true")
     p_opt.add_argument("--trials", type=int, default=30)
-    p_opt.add_argument("--n_jobs", type=int, default=2)
+    p_opt.add_argument("--n_jobs", type=int, default=DEFAULT_N_JOBS)
     p_opt.add_argument("--timeout", type=int)
     p_opt.add_argument("--quote_order_qty_usdt", type=float, default=8.0)
     p_opt.add_argument("--min_order_notional", type=float, default=6.0)
@@ -395,6 +503,30 @@ def main() -> None:
     p_plot.add_argument("--output_dir", default="reports")
     p_plot.add_argument("--signal_bins", type=int, default=30)
 
+    p_sweet = sub.add_parser("sweet-spot", help="Buscar el seteo dulce en dos fases y producir reporte unificado")
+    p_sweet.add_argument("--strategy", default="dorothy")
+    p_sweet.add_argument("--symbol", required=True)
+    p_sweet.add_argument("--interval", required=True)
+    p_sweet.add_argument("--start_ts", required=True, help="Inicio del periodo (ms UTC)")
+    p_sweet.add_argument("--end_ts", required=True, help="Fin del periodo (ms UTC)")
+    p_sweet.add_argument("--initial_cash", type=float, default=10000.0)
+    p_sweet.add_argument("--fee_rate", type=float, default=0.001)
+    p_sweet.add_argument("--slippage_bps", type=float, default=2.0)
+    p_sweet.add_argument("--heikin_ashi", action="store_true")
+    p_sweet.add_argument("--loop_seconds", type=int)
+    p_sweet.add_argument("--mode", default="balanced", choices=("safe", "balanced", "max-stable"))
+    p_sweet.add_argument("--coarse_window_pct", type=float, default=0.25)
+    p_sweet.add_argument("--coarse_trials", type=int, default=60)
+    p_sweet.add_argument("--top_k", type=int, default=5)
+    p_sweet.add_argument("--objective_metric", default="total_return")
+    p_sweet.add_argument("--direction", default="maximize", choices=("maximize", "minimize"))
+    p_sweet.add_argument("--sampler", default="tpe", choices=("tpe", "random"))
+    p_sweet.add_argument("--seed", type=int, default=42)
+    p_sweet.add_argument("--output_dir", default="reports")
+
+    p_clean = sub.add_parser("cleanup", help="Marcar runs colgados como aborted y purgar eventos")
+    p_clean.add_argument("--purge_events", action="store_true")
+
     sub.add_parser("menu")
     args = parser.parse_args()
     init_db(args.db)
@@ -406,6 +538,10 @@ def main() -> None:
         _show(args)
     elif args.cmd == "plot":
         _plot(args)
+    elif args.cmd == "sweet-spot":
+        _sweet_spot(args)
+    elif args.cmd == "cleanup":
+        _cleanup(args)
     else:
         _menu(args.db)
 

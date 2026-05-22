@@ -260,3 +260,83 @@ Estas propuestas se documentan para etapas futuras. El proyecto actual sigue ope
    - Reducir riesgo de colapso de hardware local.  
    - Aumentar reproducibilidad y throughput de backtests sin cambiar la UX principal de terminal.
 
+
+---
+
+## 12. Lecciones aprendidas en cargas masivas (2026-05-20)
+
+Contexto: corrida real con `XRPUSDT 1s` para todo 2024 (`31.6M` velas) con `loop_seconds=15`, Optuna 120 trials.
+
+### Qu? sali? mal
+
+- **`n_jobs ~ 100% CPU` se atasc?.** Con muchos workers concurrentes sobre `klines.db` (lectura) + `bt_runs`/`bt_events` (escritura), SQLite entr? en contenci?n y los trials dejaron de avanzar.
+- **Write amplification masiva.** El modo hist?rico emit?a un evento `hold` por cada vela. Para 1s anual eso son **decenas de millones de filas por trial**, multiplicado por workers en paralelo.
+- **Dataset enorme x worker.** Cada worker carga el dataset completo en memoria; con muchos workers se dispara la RAM y todo se vuelve I/O-bound.
+- **No hab?a watchdog.** Al matar el proceso quedaban runs en estado `running` para siempre, ensuciando dashboard y m?tricas.
+
+### Qu? se incorpor? al artefacto
+
+- **`backtest/resources.py`**: autoperfilador con tres modos:
+  - `safe` (~50% CPU / 40% RAM)
+  - `balanced` (~70% CPU / 60% RAM)
+  - `max-stable` (~85% CPU / 75% RAM)
+  Usa `psutil` si est? disponible; si no, cae a `os.cpu_count()`. Recibe un `dataset_candles` opcional para estimar RAM por worker.
+- **`EngineConfig.events_mode`** con tres niveles:
+  - `full` ? comportamiento legacy (un evento por vela).
+  - `lite` ? solo `fill`/`order_rejected` + snapshots de equity cada `snapshot_seconds` (default 1h).
+  - `minimal` ? solo `fill`/`order_rejected`.
+  Por defecto, **`optimize_strategy` usa `lite`** para no destruir SQLite.
+- **`backtest/cleanup.py`**: `abort_stale_runs()` y `purge_aborted_run_events()`. Se llama autom?ticamente al inicio de `optimize_strategy` y se expone como `python backtest_cli.py cleanup`.
+- **`backtest/sweet_spot.py` + `sweet_spot_report.py`**: pipeline en dos fases que es el camino recomendado para datasets masivos.
+
+### Regla pr?ctica
+
+- Cargas masivas (? 5M velas) ? `mode=balanced` o `safe`, **nunca** `n_jobs ? cpu_count`.
+- Si vas a optimizar con muchos trials, deja la persistencia en `lite` y solo activa `full` para el run ganador (eso es exactamente lo que hace el pipeline `sweet-spot`).
+- Si interrumpiste algo, corre `python backtest_cli.py cleanup` antes de relanzar.
+
+---
+
+## 13. Buscador de seteo dulce (`sweet-spot`)
+
+Pensado para responder la pregunta operativa: **"?cu?l es el mejor seteo para este bot en este s?mbolo y periodo, sin reventar la m?quina?"**
+
+### C?mo funciona
+
+1. **Fase 1 (b?squeda amplia)**: Optuna sobre una ventana corta (default 25% del periodo) con muchos trials y persistencia `lite`. Aqu? se exploran combinaciones r?pido.
+2. **Fase 2 (validaci?n focal)**: replay del top-K (default 5) sobre el periodo completo con persistencia `full`, para tener gr?ficas y m?tricas confiables.
+3. **Reporte unificado**: se genera un `*_sweet_spot_report.md` con:
+   - Veredicto (verde/amarillo/rojo por ganancia, riesgo, estabilidad, eficiencia, aciertos, balance, actividad).
+   - Interpretaci?n en lenguaje no t?cnico de cada gr?fica.
+   - Setup ganador (par?metros) y comando exacto para replicarlo.
+   - Tabla de candidatos alternativos.
+
+### Uso desde CLI
+
+```bash
+python backtest_cli.py --db klines.db sweet-spot   --strategy dorothy --symbol XRPUSDT --interval 1s   --start_ts 1704067200000 --end_ts 1735689600000   --loop_seconds 15 --mode balanced   --coarse_trials 60 --top_k 5
+```
+
+### Uso desde men?
+
+Opci?n **5) Buscar seteo dulce**. Pide s?mbolo, intervalo, estrategia, periodo, modo y trials.
+
+### Salidas
+
+Todo va a `reports/sweet_spot/<focused_study_name>/`:
+
+- `sweet_<run_id>_sweet_spot_report.md` ? **lectura principal del usuario**
+- `sweet_<run_id>_integrated_report.md`
+- `sweet_<run_id>_bot_summary.md`
+- `sweet_<run_id>_metrics.json`, `_equity.csv`, `_final_table.{md,csv}`
+- `sweet_<run_id>_*.png` (equity, drawdown, returns_hist, monthly heatmap/spectrum, signal histograms, fill activity heatmap)
+- `sweet_<run_id>_artifacts.json` ? ?ndice de archivos
+
+### Gu?a r?pida para el usuario
+
+1. Asegura datos del s?mbolo/intervalo en `klines.db` (usa `cli.py --mode zip`).
+2. Lanza `sweet-spot` con `--mode balanced` (o `safe` si la m?quina est? cargada).
+3. Abre el archivo `*_sweet_spot_report.md`: el veredicto y la secci?n "Que dice cada grafica" est?n en lenguaje claro.
+4. Si el veredicto es **verde**, copia el comando de "Como replicarlo" y ?salo en producci?n con capital moderado.
+5. Repite el proceso cada 1?3 meses; los reg?menes de mercado cambian.
+
