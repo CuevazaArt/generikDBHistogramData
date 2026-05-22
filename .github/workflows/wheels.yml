@@ -53,7 +53,7 @@ jobs:
 
       - name: Upload wheels
         if: steps.crate.outputs.present == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-linux-${{ matrix.target }}-py${{ matrix.python-version }}
           path: dist/*.whl
@@ -96,7 +96,7 @@ jobs:
 
       - name: Upload wheels
         if: steps.crate.outputs.present == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-windows-${{ matrix.target }}-py${{ matrix.python-version }}
           path: dist/*.whl
@@ -137,7 +137,7 @@ jobs:
 
       - name: Upload wheels
         if: steps.crate.outputs.present == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-macos-${{ matrix.target }}-py${{ matrix.python-version }}
           path: dist/*.whl
@@ -173,7 +173,7 @@ jobs:
 
       - name: Upload sdist
         if: steps.crate.outputs.present == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-sdist
           path: dist/*.tar.gz
