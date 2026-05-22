@@ -37,7 +37,7 @@ jobs:
           --health-retries 10
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Python 3.11
         uses: actions/setup-python@v5
