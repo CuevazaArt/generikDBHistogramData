@@ -36,9 +36,14 @@ operando exclusivamente cuando el gate de tendencia HA está BULLISH.
 ## Runs XRPUSDT 1s (2024) — notas de campo
 
 Corridas con `scripts/run_xrpusdt_2024_dorothy_strict.py`, cadena **mensual
-encadenada** (M01→M12, estado broker + `active_sell_limits` heredado), datos en
-`klines.db` + Parquet `data/klines/symbol=XRPUSDT/interval=1s/year=2024/`
-(~31,6M velas). Seteo común salvo donde se indica:
+encadenada** (`2024-01`→`2024-12` en el formato actual; las corridas
+historicas usaron etiquetas legacy `M01..M12`), estado broker +
+`active_sell_limits` heredado entre meses, datos en `klines.db` + Parquet
+`data/klines/symbol=XRPUSDT/interval=1s/year=2024/` (~31,6M velas). Desde
+2026-05 las ventanas se generan dinamicamente desde `--start_ts/--end_ts`
+(via `backtest.calendar_windows.monthly_windows`), por lo que la misma
+receta aplica a 2025 u otros simbolos/intervalos. Seteo común salvo donde
+se indica:
 
 | Parámetro | Valor |
 | --- | --- |

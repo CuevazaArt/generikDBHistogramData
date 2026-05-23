@@ -38,6 +38,7 @@ ENTREGABLES_DIRNAME = "entregables"
 RUNS_BUCKET = "runs"
 STUDIES_BUCKET = "studies"
 STRICT_BUCKET = "strict"
+DATASETS_BUCKET = "datasets"
 
 
 def _utc_now_iso() -> str:
@@ -140,6 +141,27 @@ def strict_report_dir(base: str, name: str, *, ensure_manifest: bool = True) -> 
     return target
 
 
+def dataset_report_dir(base: str, name: str, *, ensure_manifest: bool = True) -> str:
+    """Return (and create) the prepared-dataset artifact folder.
+
+    Layout: ``<base>/entregables/datasets/<name>/``.
+    """
+    safe = _safe_segment(name)
+    target = os.path.join(_normalize_base(base), DATASETS_BUCKET, safe)
+    os.makedirs(target, exist_ok=True)
+    if ensure_manifest:
+        _ensure_manifest(
+            target,
+            title=safe,
+            kind="Artefacto de dataset preparado para runs genericos",
+            extra_lines=[
+                "- Artefactos esperados: `manifest.json` y un archivo de datos",
+                "  preparado (cache Parquet reutilizable o snapshot JSONL).",
+            ],
+        )
+    return target
+
+
 def _safe_segment(name: str) -> str:
     """Strip path separators so caller-supplied names cannot escape the bucket."""
     s = (name or "").strip()
@@ -224,9 +246,11 @@ __all__ = [
     "RUNS_BUCKET",
     "STUDIES_BUCKET",
     "STRICT_BUCKET",
+    "DATASETS_BUCKET",
     "entregables_root",
     "run_report_dir",
     "study_report_dir",
     "strict_report_dir",
+    "dataset_report_dir",
     "write_manifest",
 ]

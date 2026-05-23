@@ -10,6 +10,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from backtest.calendar_windows import monthly_windows as _calendar_monthly_windows
 from backtest.cleanup import abort_stale_runs
 from backtest.engine import EngineConfig
 from backtest.guards import ResourceGuard, ResourceGuardConfig
@@ -130,22 +131,6 @@ def _quarter_windows_2024() -> List[Tuple[str, int, int]]:
 
 _MS_PER_DAY = 24 * 60 * 60 * 1000
 
-# XRPUSDT 1s 2024 monthly bounds (from data/klines manifests).
-_MONTH_WINDOWS_2024_1S: List[Tuple[str, int, int]] = [
-    ("M01", 1704067200000, 1706745599000),
-    ("M02", 1706745600000, 1709251199000),
-    ("M03", 1709251200000, 1711929599000),
-    ("M04", 1711929600000, 1714521599000),
-    ("M05", 1714521600000, 1717199999000),
-    ("M06", 1717200000000, 1719791999000),
-    ("M07", 1719792000000, 1722470399000),
-    ("M08", 1722470400000, 1725148799000),
-    ("M09", 1725148800000, 1727740799000),
-    ("M10", 1727740800000, 1730419199000),
-    ("M11", 1730419200000, 1733011199000),
-    ("M12", 1733011200000, 1735689599000),
-]
-
 
 def _monthly_windows(
     start_ts: int,
@@ -153,18 +138,20 @@ def _monthly_windows(
     from_month: int = 1,
     through_month: int = 12,
 ) -> List[Tuple[str, int, int]]:
-    """Calendar months for 2024 clipped to [start_ts, end_ts]."""
-    windows: List[Tuple[str, int, int]] = []
-    for name, m_start, m_end in _MONTH_WINDOWS_2024_1S:
-        month_num = int(name[1:])
-        if month_num < int(from_month) or month_num > int(through_month):
-            continue
-        if m_end < start_ts or m_start > end_ts:
-            continue
-        windows.append((name, max(m_start, start_ts), min(m_end, end_ts)))
-    if not windows:
-        raise ValueError("No monthly windows overlap the requested range")
-    return windows
+    """Generic calendar-month windows clipped to [start_ts, end_ts].
+
+    Thin wrapper over :func:`backtest.calendar_windows.monthly_windows` so the
+    strict script can pick a year-agnostic plan from CLI args. Names use the
+    unambiguous ``YYYY-MM`` format (e.g. ``"2024-01"``) and span any year
+    range covered by ``[start_ts, end_ts]``. ``from_month``/``through_month``
+    apply per year (see helper docstring for multi-year behavior).
+    """
+    return _calendar_monthly_windows(
+        int(start_ts),
+        int(end_ts),
+        from_month=int(from_month),
+        through_month=int(through_month),
+    )
 
 
 def _load_seed_state(db_path: str, run_id: int) -> Dict[str, Any]:
@@ -346,8 +333,15 @@ def _run_chain_for_profit_factor(
 
 
 def _write_log_markdown(path: str, payload: Dict[str, Any]) -> None:
+    symbol = str(payload.get("symbol", "")).upper() or "?"
+    interval = str(payload.get("interval", "")).lower() or "?"
+    window_names = [str(w[0]) for w in payload.get("execution_windows", [])]
+    if window_names:
+        windows_label = f"{window_names[0]}..{window_names[-1]}"
+    else:
+        windows_label = "(sin ventanas)"
     lines = [
-        "# Reinicio estricto XRPUSDT 1s 2024 (trimestral encadenado)",
+        f"# Reinicio estricto {symbol} {interval} {windows_label} (encadenado)",
         "",
         "## Configuracion",
         f"- study_name: `{payload['study_name']}`",
@@ -362,9 +356,9 @@ def _write_log_markdown(path: str, payload: Dict[str, Any]) -> None:
         f"- resource_guard: `{json.dumps(payload['resource_guard'], ensure_ascii=False)}`",
         "",
         "## Metodologia",
-        "- Se evaluo cada `profit_factor` de la malla en cadena Q1->Q2->Q3->Q4.",
-        "- Cada trimestre inicia con el estado final del trimestre anterior (broker + estrategia).",
-        "- Se selecciona el `profit_factor` con mayor `final_equity` acumulada tras Q4.",
+        f"- Se evaluo cada `profit_factor` de la malla en cadena cronologica ({windows_label}).",
+        "- Cada ventana inicia con el estado final de la ventana anterior (broker + estrategia).",
+        "- Se selecciona el `profit_factor` con mayor `final_equity` acumulada tras la ultima ventana.",
         "",
         "## Resultados por candidato",
     ]
@@ -376,17 +370,17 @@ def _write_log_markdown(path: str, payload: Dict[str, Any]) -> None:
         f"- best_profit_factor: `{payload['best_candidate']['profit_factor']}`",
         f"- best_final_equity: `{payload['best_candidate']['final_equity']:.6f}`",
         "",
-        "## Estado por trimestre (ganador)",
+        "## Estado por ventana (ganador)",
     ]
-    for quarter in payload["best_candidate"]["quarter_runs"]:
-        before = quarter["state_before"]
-        after = quarter["state_after"]
+    for window in payload["best_candidate"]["quarter_runs"]:
+        before = window["state_before"]
+        after = window["state_after"]
         lines.extend(
             [
-                f"### {quarter['quarter']} (run_id={quarter['run_id']})",
+                f"### {window['quarter']} (run_id={window['run_id']})",
                 f"- Estado inicial: cash={before['cash']:.6f}, pos={before['position_qty']:.6f}, avg_entry={before['avg_entry']:.6f}, active_limits={before['active_limits']}",
                 f"- Estado final: cash={after['cash']:.6f}, pos={after['position_qty']:.6f}, avg_entry={after['avg_entry']:.6f}, active_limits={after['active_limits']}, equity={after['final_equity']:.6f}",
-                f"- Metricas trimestre: `{json.dumps(quarter['metrics'], ensure_ascii=False)}`",
+                f"- Metricas ventana: `{json.dumps(window['metrics'], ensure_ascii=False)}`",
                 "",
             ]
         )
@@ -478,7 +472,9 @@ def run(args: argparse.Namespace) -> None:
         mode_tag = "month"
     else:
         mode_tag = "chain"
-    study_name = f"dorothy_xrpusdt_1s_{mode_tag}_{_now_tag()}"
+    symbol_slug = str(args.symbol).lower()
+    interval_slug = str(args.interval).lower()
+    study_name = f"dorothy_{symbol_slug}_{interval_slug}_{mode_tag}_{_now_tag()}"
     output_dir = strict_report_dir(args.output_root, study_name)
     os.makedirs(output_dir, exist_ok=True)
     write_manifest(
@@ -534,6 +530,7 @@ def run(args: argparse.Namespace) -> None:
                     "parallel_combos": len(param_combos),
                     "executor": executor,
                     "n_jobs": n_jobs,
+                    "execution_windows": [w[0] for w in execution_windows],
                     "monthly_chain": "serial dentro de cada worker",
                 },
                 ensure_ascii=False,
@@ -554,7 +551,8 @@ def run(args: argparse.Namespace) -> None:
                 {
                     "parallel_combos": 1,
                     "executor": "serial",
-                    "monthly_chain": "serial M01..M12",
+                    "execution_windows": [w[0] for w in execution_windows],
+                    "monthly_chain": "serial por mes (orden cronologico)",
                     "omp_threads": threads,
                 },
                 ensure_ascii=False,
@@ -629,7 +627,13 @@ def run(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Strict 2024 XRPUSDT Dorothy quarterly chained restart")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Strict Dorothy chained restart (default symbol XRPUSDT, interval 1s, "
+            "window 2024-01) - el modo --chain-by-month soporta cualquier "
+            "anio o rango multianual definido por --start_ts/--end_ts."
+        )
+    )
     parser.add_argument("--db", default="klines.db")
     parser.add_argument("--symbol", default="XRPUSDT")
     parser.add_argument("--interval", default="1s")
@@ -638,7 +642,10 @@ def main() -> None:
         "--end_ts",
         type=int,
         default=1706745599000,
-        help="UTC ms; default 2024-01-31 23:59:59 (un mes). Anio completo: 1735689599000",
+        help=(
+            "UTC ms; default 2024-01-31 23:59:59 (un mes). Anio 2024 completo: "
+            "1735689599000. Anio 2025 completo: 1767225599000."
+        ),
     )
     parser.add_argument("--initial_cash", type=float, default=1000.0)
     parser.add_argument("--fee_rate", type=float, default=0.001)
@@ -681,10 +688,30 @@ def main() -> None:
     parser.add_argument(
         "--chain-by-month",
         action="store_true",
-        help="Encadena un mes tras otro (M01..M12) en lugar de un solo bloque o trimestres.",
+        help=(
+            "Encadena meses calendario (YYYY-MM) derivados dinamicamente de "
+            "[start_ts, end_ts] en orden cronologico, en lugar de un solo "
+            "bloque o trimestres. Soporta cualquier anio o rango multianual."
+        ),
     )
-    parser.add_argument("--from-month", type=int, default=1, help="Primer mes 2024 (1-12) al usar --chain-by-month.")
-    parser.add_argument("--through-month", type=int, default=12, help="Ultimo mes 2024 (1-12) al usar --chain-by-month.")
+    parser.add_argument(
+        "--from-month",
+        type=int,
+        default=1,
+        help=(
+            "Filtro mes-de-anio (1-12) al usar --chain-by-month. En rangos "
+            "multianuales se aplica por anio. Default 1 = sin filtro inferior."
+        ),
+    )
+    parser.add_argument(
+        "--through-month",
+        type=int,
+        default=12,
+        help=(
+            "Filtro mes-de-anio (1-12) al usar --chain-by-month. En rangos "
+            "multianuales se aplica por anio. Default 12 = sin filtro superior."
+        ),
+    )
     parser.add_argument(
         "--seed-run-id",
         type=int,

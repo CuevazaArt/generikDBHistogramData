@@ -17,6 +17,11 @@ Antes de cualquier descarga, backtest u optimización:
 3. Para cargas pesadas (`1s` anual), preferir streaming Parquet + `--checkpoint_every_bars` y ejecutar por bloques (mensual/trimestral) si es necesario.
 4. No correr varias optimizaciones pesadas contra la misma SQLite; activar PostgreSQL para concurrencia real (`BACKTEST_METADATA_BACKEND=pg`).
 5. Todo entregable termina en `reports/entregables/` con `MANIFEST.md` por carpeta.
+6. **Homologacion y reutilizacion de capacidades**: cada vez que se alcance o desarrolle una herramienta, accesorio o mejora que incremente las capacidades de backtest (sizing, accesorios de estrategia, curaduria de datos, orquestacion, reportes, integridad, etc.), debe quedar:
+   - **Homologada** a situaciones y conjuntos de datos analogos (cualquier `symbol/interval/year`, no hardcodes 2024/XRP/Dorothy).
+   - **Accesible y reutilizable** por otros bots, scripts y herramientas del proyecto (interfaz comun, manifest o subcomando CLI), sin duplicar logica.
+   - **Documentada** en `README.md`/`docs/` con ejemplo y referencia desde la biblioteca (`library/`) cuando aplique.
+7. **Fin ultimo de la herramienta**: la busqueda y desarrollo de **artefactos** (bots, accesorios, presets, datasets curados, indicadores, reportes) que ayuden a generar los **mayores beneficios posibles en el menor tiempo posible**. Toda decision tecnica (datos, motor, persistencia, paralelismo, reportes) se prioriza segun ese criterio.
 
 ## Quick start
 
@@ -39,6 +44,92 @@ python backtest_cli.py --db klines.db plot --run_id 1 --output_dir reports
 
 Recetas adicionales (resume, walk-forward, multi-symbol, migración a PG,
 publicar bots) en [`USER_MANUAL.md`](USER_MANUAL.md) §14.
+
+## Artefacto intermedio de dataset (curado/preparacion)
+
+El comando `dataset` genera un artefacto **generico** de ventana de datos para
+cualquier bot/estrategia (no solo Dorothy). Sirve para desacoplar el curado de
+datos de la corrida del bot y reutilizar la misma ventana preparada en varias
+ejecuciones.
+
+Comandos principales:
+
+```powershell
+# Preparar artefacto (desde klines.db -> cache parquet o snapshot JSONL)
+python backtest_cli.py --db klines.db dataset prepare --symbol XRPUSDT --interval 1s --start_ts 1735689600000 --end_ts 1767225599000 --name xrp_2025_1s
+
+# Verificar integridad estructural del artefacto ya generado
+python backtest_cli.py --db klines.db dataset verify --manifest reports/entregables/datasets/xrp_2025_1s/manifest.json
+```
+
+Salida esperada:
+
+```text
+reports/entregables/datasets/<artifact_name>/
+  MANIFEST.md
+  manifest.json
+  window.jsonl                  # fallback si no hay cache parquet
+```
+
+`manifest.json` incluye:
+- ventana solicitada (`symbol`, `interval`, `start_ts`, `end_ts`);
+- archivos preparados (`prepared_data.files`), ya sea cache Parquet reutilizable
+  o snapshot JSONL;
+- diagnosticos de integridad (`row_count`, `gap_count`, `gaps`,
+  `expected_step_ms`);
+- snapshot de reproducibilidad (`reproducibility.git`) para auditar con que
+  estado de repo se genero el artefacto.
+
+Este flujo permite detectar gaps antes del backtest y repetir corridas con la
+misma base de datos curada de forma trazable.
+
+## Strict run encadenado por mes (--chain-by-month)
+
+`scripts/run_xrpusdt_2024_dorothy_strict.py` corre la estrategia `dorothy` en
+**cadena cronologica** mes-a-mes: cada mes inicia con el estado final del mes
+anterior (broker + `active_sell_limits` + indicadores serializables). Esto
+permite reproducir trayectorias mensuales realistas sin que un solo bloque de
+~31M velas en 1s sobrepase la RAM disponible.
+
+Desde 2026-05 el modo **es generico**: las ventanas se calculan dinamicamente
+desde `--start_ts/--end_ts` (UTC ms) usando
+`backtest.calendar_windows.monthly_windows`. Funciona para cualquier anio o
+rango multianual; los nombres de ventana usan el formato `YYYY-MM`
+(`2024-01`, `2025-12`, ...) para que sean inequivocos entre anios.
+
+```powershell
+# 2024 completo (12 meses, 2024-01..2024-12) - comportamiento equivalente al previo
+python scripts/run_xrpusdt_2024_dorothy_strict.py --chain-by-month `
+  --symbol XRPUSDT --interval 1s `
+  --start_ts 1704067200000 --end_ts 1735689599000 `
+  --explain_only
+
+# 2025 completo (12 meses, 2025-01..2025-12)
+python scripts/run_xrpusdt_2024_dorothy_strict.py --chain-by-month `
+  --symbol XRPUSDT --interval 1s `
+  --start_ts 1735689600000 --end_ts 1767225599000 `
+  --explain_only
+
+# Rango multianual (Nov-2024 -> Feb-2025, 4 ventanas)
+python scripts/run_xrpusdt_2024_dorothy_strict.py --chain-by-month `
+  --symbol XRPUSDT --interval 1s `
+  --start_ts 1730419200000 --end_ts 1740787199000 `
+  --explain_only
+```
+
+`--from-month` y `--through-month` son filtros mes-de-anio (`1..12`):
+
+- En rangos de **un solo anio** funcionan como antes (acotan el subconjunto
+  de meses).
+- En rangos **multianuales** se aplican **por anio**: con
+  `--from-month 11 --through-month 12` y rango `2024-01..2025-12` se generan
+  `2024-11, 2024-12, 2025-11, 2025-12` (4 ventanas). Con los defaults
+  `1..12` no hay filtro y el rango se cubre completo.
+
+Las ventanas siempre quedan **clampeadas** a `[start_ts, end_ts]`, asi que
+arrancar/terminar a mitad de mes produce un primer/ultimo bin parcial, sin
+errores. El nombre del estudio (`study_name`) se deriva de `symbol` e
+`interval` y NO esta hardcodeado a XRPUSDT/2024.
 
 ## Arquitectura en una vista
 

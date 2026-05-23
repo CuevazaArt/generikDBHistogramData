@@ -187,7 +187,9 @@ class DorothyHubStrategy(StrategyBase):
         notional = self._quote_notional_for_buy(ctx)
         if notional <= 0 or ctx.cash < notional:
             return Signal(action="hold", reason="insufficient_cash")
-        size_pct = max(0.01, min(1.0, notional / max(ctx.cash, 1e-9)))
+        # Preserve target buy notional (after spot-filter normalization) even when
+        # available cash is high; avoid forcing Dorothy buys to a 1% floor.
+        size_pct = max(0.0, min(1.0, notional / max(ctx.cash, 1e-9)))
         meta = dict(metadata or {})
         if self.volumen_incremental:
             meta["volumen_incremental"] = True

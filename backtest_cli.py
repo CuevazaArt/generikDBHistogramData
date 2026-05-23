@@ -8,6 +8,7 @@ from statistics import mean
 from typing import Optional
 
 from backtest.cleanup import abort_stale_runs, purge_aborted_run_events
+from backtest.dataset_artifact import prepare_dataset_artifact, verify_dataset_artifact
 from backtest.engine import EngineConfig
 from backtest.guards import ResourceGuardConfig
 from backtest.optimize import optimize_strategy
@@ -823,6 +824,33 @@ def _cache(args: argparse.Namespace) -> None:
     print({"status": "error", "reason": f"unknown cache action: {args.action}"})
 
 
+def _dataset(args: argparse.Namespace) -> None:
+    """Prepare or verify generic reusable dataset artifacts."""
+    if args.action == "prepare":
+        payload = prepare_dataset_artifact(
+            db_path=args.db,
+            symbol=args.symbol,
+            interval=args.interval,
+            start_ts=int(args.start_ts),
+            end_ts=int(args.end_ts),
+            output_base=args.output_dir,
+            artifact_name=args.name,
+            cache_root=args.cache_root,
+            prefer_parquet_cache=not bool(args.no_parquet_cache),
+            overwrite_cache=bool(args.overwrite_cache),
+            max_gaps=int(args.max_gaps),
+        )
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+
+    if args.action == "verify":
+        payload = verify_dataset_artifact(args.manifest)
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+
+    print(json.dumps({"status": "error", "reason": f"unknown dataset action: {args.action}"}))
+
+
 def _attach_engine_flags(p: argparse.ArgumentParser, *, include_resume: bool = True) -> None:
     """Forward-compatible Fase 0/1/2 flags shared by run/optimize/sweet-spot."""
     p.add_argument(
@@ -1287,6 +1315,20 @@ def main() -> None:
     p_cache.add_argument("--cache_root", default="reports/cache/parquet")
     p_cache.add_argument("--overwrite", action="store_true")
 
+    p_dataset = sub.add_parser("dataset", help="Preparar/verificar artefactos de dataset reutilizables")
+    p_dataset.add_argument("action", choices=("prepare", "verify"))
+    p_dataset.add_argument("--manifest", help="Ruta a manifest.json del artefacto (requerido para verify)")
+    p_dataset.add_argument("--symbol", help="Simbolo, p.ej. BTCUSDT (requerido para prepare)")
+    p_dataset.add_argument("--interval", help="Intervalo, p.ej. 1m o 1s (requerido para prepare)")
+    p_dataset.add_argument("--start_ts", type=int, help="Inicio de ventana (ms UTC) para prepare")
+    p_dataset.add_argument("--end_ts", type=int, help="Fin de ventana (ms UTC) para prepare")
+    p_dataset.add_argument("--name", default=None, help="Nombre opcional del artefacto")
+    p_dataset.add_argument("--output_dir", default="reports")
+    p_dataset.add_argument("--cache_root", default="reports/cache/parquet")
+    p_dataset.add_argument("--no_parquet_cache", action="store_true")
+    p_dataset.add_argument("--overwrite_cache", action="store_true")
+    p_dataset.add_argument("--max_gaps", type=int, default=1000)
+
     p_wf = sub.add_parser("walk-forward", help="Evaluacion walk-forward (folds rodantes)")
     p_wf.add_argument("--strategy", required=True)
     p_wf.add_argument("--symbol", required=True)
@@ -1417,6 +1459,19 @@ def main() -> None:
         _cleanup(args)
     elif args.cmd == "cache":
         _cache(args)
+    elif args.cmd == "dataset":
+        if args.action == "prepare":
+            missing = [
+                name
+                for name in ("symbol", "interval", "start_ts", "end_ts")
+                if getattr(args, name, None) in (None, "")
+            ]
+            if missing:
+                raise SystemExit(f"dataset prepare requiere: {', '.join(missing)}")
+        elif args.action == "verify":
+            if not getattr(args, "manifest", None):
+                raise SystemExit("dataset verify requiere --manifest")
+        _dataset(args)
     elif args.cmd == "walk-forward":
         _walk_forward(args)
     elif args.cmd == "multi-symbol":

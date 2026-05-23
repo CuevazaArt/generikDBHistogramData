@@ -12,6 +12,7 @@ from backtest.strategies import (
     LouiseStrategy,
     MashaStrategy,
 )
+from backtest.strategy_base import StrategyContext
 
 
 def test_listed_strategies_contain_core_bots():
@@ -111,3 +112,27 @@ def test_dorothy_can_restore_internal_state():
     strategy.import_state({"active_sell_limits": [1.2, 1.0, -3.0]})
     out = strategy.export_state()
     assert out["active_sell_limits"] == [1.0, 1.2]
+
+
+def test_dorothy_buy_size_pct_can_be_below_one_percent():
+    strategy = DorothyHubStrategy(
+        profit_factor=0.02,
+        margin_drop_factor=0.0005,
+        quote_order_qty_usdt=8.0,
+        max_rungs=10,
+        symbol="XRPUSDT",
+    )
+    candle = {"open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "price_source": 1.0, "pec_trend": "BULLISH"}
+    ctx = StrategyContext(
+        index=0,
+        candle=candle,
+        candles=[candle],
+        cash=5000.0,
+        position_qty=0.0,
+        avg_entry=0.0,
+        equity=5000.0,
+    )
+
+    signal = strategy.on_bar(ctx)
+    assert signal.action == "buy"
+    assert 0.0 < signal.size_pct < 0.01

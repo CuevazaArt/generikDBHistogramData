@@ -9,6 +9,24 @@ mismos nombres de archivo, mismas columnas, misma estructura de
 secciones. La unica diferencia practica es la latencia para runs con
 millones de eventos.
 
+## Artefacto generico de dataset (prepare/verify)
+
+Antes de correr reportes o backtests pesados, puede prepararse una ventana de
+datos reutilizable para cualquier bot con `dataset prepare` y validarse con
+`dataset verify`.
+
+```powershell
+python backtest_cli.py --db klines.db dataset prepare --symbol XRPUSDT --interval 1s --start_ts 1735689600000 --end_ts 1767225599000 --name xrp_2025_1s
+python backtest_cli.py --db klines.db dataset verify --manifest reports/entregables/datasets/xrp_2025_1s/manifest.json
+```
+
+Los artefactos quedan en `reports/entregables/datasets/<name>/` y su
+`manifest.json` deja trazabilidad de:
+- integridad de la ventana (`row_count`, `gap_count`, `gaps`);
+- reproducibilidad (`reproducibility.git`);
+- archivos preparados (`prepared_data.files`), usando cache Parquet cuando esta
+  disponible o snapshot JSONL de respaldo.
+
 ## Cuando se usa DuckDB y cuando SQLite
 
 El selector vive en `backtest/plots.py` y aplica la regla del backend
