@@ -84,7 +84,11 @@ def _enrich_strategy_params(
         "initial_run_cash": float(args.initial_cash),
         "volumen_incremental": bool(getattr(args, "volumen_incremental", False)),
         "volumen_incremental_multiplier": float(getattr(args, "volumen_incremental_multiplier", 1.05)),
-        "require_trend_gate": not bool(getattr(args, "no_trend_gate", False)),
+        "volumen_compuesto": bool(getattr(args, "volumen_compuesto", False)),
+        "volumen_compuesto_min_usdt": float(getattr(args, "volumen_compuesto_min_usdt", 6.0)),
+        "volumen_compuesto_greed_factor": float(getattr(args, "volumen_compuesto_greed_factor", 0.0)),
+        "require_trend_gate": bool(getattr(args, "require_trend_gate", False))
+        and not bool(getattr(args, "no_trend_gate", False)),
     }
     if bool(getattr(args, "require_entry_gate", False)):
         params["require_entry_gate"] = True
@@ -102,10 +106,14 @@ def _windows_label(execution_windows: List[Tuple[str, int, int]]) -> str:
 
 def _dorothy_briefing_notes(args: argparse.Namespace) -> List[str]:
     notes: List[str] = []
-    if bool(getattr(args, "no_trend_gate", False)):
+    if bool(getattr(args, "require_trend_gate", False)):
         notes.append(
-            "Gate de tendencia DESACTIVO: compras/DCAs posibles en BEARISH; "
-            "las ventas por TP se evaluan antes del gate."
+            "Gate de tendencia ACTIVO: compras/DCAs solo con pec_trend=BULLISH."
+        )
+    else:
+        notes.append(
+            "Gate de tendencia DESACTIVO (default): compras/DCAs en cualquier tendencia; "
+            "ventas por TP se evaluan antes del gate."
         )
     if bool(getattr(args, "require_entry_gate", False)):
         notes.append(
@@ -114,6 +122,12 @@ def _dorothy_briefing_notes(args: argparse.Namespace) -> List[str]:
     if bool(getattr(args, "volumen_incremental", False)):
         notes.append(
             "VolumenIncremental activo: notional base x multiplier cuando cash > initial_run_cash."
+        )
+    if bool(getattr(args, "volumen_compuesto", False)):
+        greed = float(getattr(args, "volumen_compuesto_greed_factor", 0.0))
+        notes.append(
+            "VolumenCompuesto activo: notional = 8 * (equity/initial_equity) * (1 + greed), piso "
+            f"{float(getattr(args, 'volumen_compuesto_min_usdt', 6.0))} USDT, greed={greed}."
         )
     if bool(getattr(args, "chain_by_month", False)):
         notes.append("Cadena mensual: estado broker + active_sell_limits heredado entre ventanas.")
@@ -174,11 +188,19 @@ def _write_pre_run_briefing(
                 "active": bool(getattr(args, "volumen_incremental", False)),
                 "detail": f"multiplier={float(getattr(args, 'volumen_incremental_multiplier', 1.05))}",
             },
+            "volumen_compuesto": {
+                "active": bool(getattr(args, "volumen_compuesto", False)),
+                "detail": (
+                    f"factor=(equity/initial)*(1+greed), min_usdt="
+                    f"{float(getattr(args, 'volumen_compuesto_min_usdt', 6.0))}, "
+                    f"greed={float(getattr(args, 'volumen_compuesto_greed_factor', 0.0))}"
+                ),
+            },
         },
         gates={
             "trend_ha_bullish": {
-                "active": not bool(getattr(args, "no_trend_gate", False)),
-                "description": "Gate 1: pec_trend == BULLISH (Heikin-Ashi MA1>MA2)",
+                "active": bool(getattr(args, "require_trend_gate", False)),
+                "description": "Gate 1: pec_trend == BULLISH (Heikin-Ashi MA1>MA2). Default DESACTIVO.",
             },
             "entry_price_below_open": {
                 "active": bool(getattr(args, "require_entry_gate", False)),
@@ -336,6 +358,54 @@ def _state_summary(state: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _collect_year_checkpoint(
+    quarter_name: str,
+    run_id: int,
+    state: Dict[str, Any],
+    *,
+    is_final_window: bool,
+) -> Dict[str, Any] | None:
+    """Snapshot bot state at calendar year boundaries (December) or chain end."""
+    name = str(quarter_name)
+    if name.endswith("-12") or is_final_window:
+        year = name[:4] if len(name) >= 4 else name
+        return {
+            "year": year,
+            "window": name,
+            "run_id": int(run_id),
+            "state_summary": _state_summary(state),
+            "final_state": state,
+        }
+    return None
+
+
+def _write_year_checkpoints(output_dir: str, checkpoints: List[Dict[str, Any]]) -> None:
+    if not checkpoints:
+        return
+    bundle_path = os.path.join(output_dir, "year_checkpoints.json")
+    with open(bundle_path, "w", encoding="utf-8") as fh:
+        json.dump({"checkpoints": checkpoints}, fh, ensure_ascii=False, indent=2)
+    lines = ["# Checkpoints anuales (estado bot persistido)", ""]
+    for cp in checkpoints:
+        year = cp.get("year", "?")
+        cp_path = os.path.join(output_dir, f"year_checkpoint_{year}.json")
+        with open(cp_path, "w", encoding="utf-8") as fh:
+            json.dump(cp, fh, ensure_ascii=False, indent=2)
+        s = cp.get("state_summary") or {}
+        lines.extend(
+            [
+                f"## {year} (ventana `{cp.get('window')}`, run_id={cp.get('run_id')})",
+                f"- equity: **{float(s.get('final_equity', 0)):.2f}**",
+                f"- cash: {float(s.get('cash', 0)):.4f}, pos: {float(s.get('position_qty', 0)):.4f}, "
+                f"avg: {float(s.get('avg_entry', 0)):.4f}, limits: {int(s.get('active_limits', 0))}",
+                f"- artefacto: `year_checkpoint_{year}.json`",
+                "",
+            ]
+        )
+    with open(os.path.join(output_dir, "YEAR_CHECKPOINTS.md"), "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines).strip() + "\n")
+
+
 def _guard_from_args(args: argparse.Namespace) -> ResourceGuard:
     env_cfg = ResourceGuardConfig.from_env()
     cfg = ResourceGuardConfig(
@@ -383,7 +453,9 @@ def _run_chain_for_profit_factor(
 ) -> Dict[str, Any]:
     state: Dict[str, Any] | None = dict(chain_seed_state) if chain_seed_state else None
     quarter_runs: List[Dict[str, Any]] = []
-    for quarter_name, q_start, q_end in execution_windows:
+    year_checkpoints: List[Dict[str, Any]] = []
+    n_windows = len(execution_windows)
+    for idx, (quarter_name, q_start, q_end) in enumerate(execution_windows):
         _guard_wait_if_needed(
             guard=guard,
             guard_events=guard_events,
@@ -428,6 +500,14 @@ def _run_chain_for_profit_factor(
                 "state_after": _state_summary(state),
             }
         )
+        cp = _collect_year_checkpoint(
+            quarter_name,
+            int(result.run_id),
+            state,
+            is_final_window=(idx == n_windows - 1),
+        )
+        if cp is not None:
+            year_checkpoints.append(cp)
     final_state = state or {}
     return {
         "profit_factor": float(strategy_params["profit_factor"]),
@@ -435,6 +515,7 @@ def _run_chain_for_profit_factor(
         "final_state": final_state,
         "final_equity": float(final_state.get("final_equity", 0.0)),
         "quarter_runs": quarter_runs,
+        "year_checkpoints": year_checkpoints,
     }
 
 
@@ -743,6 +824,7 @@ def run(args: argparse.Namespace) -> None:
         json.dump(payload, fh, ensure_ascii=False, indent=2)
     log_path = os.path.join(output_dir, "RESTART_LOG.md")
     _write_log_markdown(log_path, payload)
+    _write_year_checkpoints(output_dir, list(best_candidate.get("year_checkpoints") or []))
     telemetry.sample(phase="run:end")
     telemetry.close()
     print(json.dumps({"study_name": study_name, "output_dir": output_dir, "best_candidate": best_candidate}, ensure_ascii=False, indent=2))
@@ -858,9 +940,40 @@ def main() -> None:
         help="Multiplicador cuando cash disponible supera initial_cash de la corrida.",
     )
     parser.add_argument(
+        "--volumen-compuesto",
+        action="store_true",
+        help=(
+            "Accesorio VolumenCompuesto: notional = quote_order_qty * (equity/initial_cash), "
+            "con piso configurable. Mutuamente excluyente con --volumen-incremental."
+        ),
+    )
+    parser.add_argument(
+        "--volumen-compuesto-min-usdt",
+        type=float,
+        default=6.0,
+        help="Piso USDT del lote con VolumenCompuesto (default 6).",
+    )
+    parser.add_argument(
+        "--volumen-compuesto-greed-factor",
+        type=float,
+        default=0.0,
+        help=(
+            "Boost ligero adicional en VC: factor *= (1 + greed). "
+            "Ej. 0.01 con equity 110%% del inicial -> 1.1 * 1.01 = 1.111."
+        ),
+    )
+    parser.add_argument(
+        "--require-trend-gate",
+        action="store_true",
+        help=(
+            "Activa gate 1 (pec_trend BULLISH). Por defecto los gates estan DESACTIVOS "
+            "en backtest strict."
+        ),
+    )
+    parser.add_argument(
         "--no-trend-gate",
         action="store_true",
-        help="Desactiva gate 1 (pec_trend BULLISH). Las ventas por TP siguen activas.",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--no-entry-gate",

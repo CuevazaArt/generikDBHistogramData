@@ -1,15 +1,20 @@
 # dorothy
 
 Adaptador de backtest para Pecunator Dorothy: DCA con escalera de profit
-operando exclusivamente cuando el gate de tendencia HA está BULLISH.
+operando exclusivamente cuando el gate de tendencia HA está BULLISH **si
+`require_trend_gate=True`**. Desde 2026-05-23 el backtest strict deja los gates
+**desactivados por defecto** (`--require-trend-gate` para activar gate 1;
+`--require-entry-gate` para gate 2 live parity).
+
+Registro comparativo reproducible: [`runs_registry.md`](runs_registry.md).
 
 ## Tesis
 
 - En spot long-only, comprar de a tramos cuando el precio cae por debajo
   de un anclaje configurable y descargar mediante límites de venta cuando
   el precio alcanza objetivos de profit acumulado.
-- Filtrar entradas con `pec_trend == "BULLISH"` reduce DCAs prolongados
-  durante mercados bajistas extendidos.
+- Filtrar entradas con `pec_trend == "BULLISH"` cuando gate 1 está activo
+  (`--require-trend-gate`). **Default backtest strict: gates OFF.**
 
 ## Decisiones
 
@@ -104,18 +109,99 @@ Informes bajo `reports/entregables/strict/` (prefijo
    - Los rangos citados para **1h** (`0.04–0.06` / `0.005–0.015`) **no trasladan**
      directo a 1s; hace falta re-optimizar o walk-forward en 1s.
 
-### VolumenIncremental (experimental, 2026-05-22)
+### VolumenIncremental (reservado, experimental)
 
 Accesorio opcional en `DorothyHubStrategy`: si `cash` disponible para compra es **mayor**
 que `initial_run_cash` de la corrida, la siguiente orden usa
-`quote_order_qty_usdt * 1.05`; si no, notional base ×1. El notional se ajusta con
-filtros spot (`backtest/exchange_filters.py`, LOT_SIZE / MIN_NOTIONAL, redondeo **arriba**
-al paso de cantidad). CLI strict: `--volumen-incremental`.
+`quote_order_qty_usdt * multiplier`; si no, notional base. Mutuamente excluyente con
+VolumenCompuesto. CLI strict: `--volumen-incremental`.
+
+### VolumenCompuesto (experimental, 2026-05-23)
+
+Accesorio alternativo de sizing (no combinar con VI). Usa `Decimal` end-to-end en
+`backtest/dorothy_accessories.py`:
+
+- `factor = (equity / initial_equity) * (1 + greed_factor)` (1000→1.0, 1100→1.1, 900→0.9 sin greed)
+- `notional = quote_order_qty_usdt * factor` (base 8 USDT)
+- **Piso:** 6 USDT (`--volumen-compuesto-min-usdt`)
+- **Greed (opcional):** `--volumen-compuesto-greed-factor 0.01` añade +1 % al factor
+  (1100 equity → `1.1 * 1.01 = 1.111` → 8.888 USDT). Default `0` = sin boost.
+
+CLI strict: `--volumen-compuesto` [`--volumen-compuesto-greed-factor 0.01`].
 
 ### Pendientes / no concluido aquí
 
-- Comparar contra **buy & hold** XRP 2024 en la misma ventana.
-- Walk-forward u otro año (2023, 2025) antes de capital real.
+- Walk-forward formal (train/test por año) antes de escalar capital.
 - Engine **streaming** (sin materializar mes entero) para año completo en <16 GB
   con IDE abierto.
 - Validación en vivo (latencia, fills, drift del gate `pec_trend`).
+- Flag automático **send-to-Earn** cuando N meses sin trades o BE distance > umbral.
+
+## Filosofía de inversión (2026-05-23)
+
+El activo operado con Dorothy se **pre-selecciona para acumular y holdear** a
+3–5 años. Spot sin apalancamiento: drawdown alto **no implica liquidación** ni
+venta forzada. Si la bag queda underwater, se registra el **break-even**
+(`avg_entry`) y el activo puede pasar a **Earn** (renta pasiva) mientras se
+espera un bull market de mediano/largo plazo. El capital desplegado es capital
+**dispuesto a perder**; el peor caso aceptable es holdear la bag acumulada.
+
+Bajo este marco, el criterio de éxito **no es maximizar USDT** sino:
+
+- acumular cantidad del activo a precio promedio razonable;
+- cristalizar ganancias parciales en cash durante la trayectoria;
+- graduar bags estancadas a HODL+Earn sin reset destructivo del encadenado.
+
+## Conclusiones cross-symbol (2024–2026, cadena mensual encadenada)
+
+Seteo base paradigmático (punto de partida, **no universal**):
+`VC min=6`, `greed=0.1`, gates OFF, `mdf=0.0005`, `initial_cash=1000`,
+`loop_seconds=29`. Ajustar `profit_factor` por activo según análisis.
+
+| Par | pf | Tramo | final USDT | Retorno | Notas |
+|---|---:|---|---:|---:|---|
+| XRP | 0.02 | 2024 solo | 2022 | +102 % | Techo en bull; no generaliza |
+| XRP | 0.02 | 2025 solo | 849 | −15 % | Año malo |
+| XRP | 0.02 | 2025–2026 cad. | 580 | −42 % | Bag atrapada; inaceptable sin filosofía HODL |
+| XRP | 0.1 | 2024–2026 cad. | 1396 | +40 % | Robusto encadenado |
+| BNB | 0.02 | 2024–2026 cad. | 1350 | +35 % | Buen acumulador |
+| BNB | 0.1 | 2024–2026 cad. | 1139 | +14 % | Menos trades, DD bajo |
+| BTC | 0.03 | 2024–2026 cad. | 1415 | +42 % | Mejor resultado encadenado |
+| ETH | 0.03 | 2024–2026 cad. | 948 | −5 % | 2026 destruye; bag underwater |
+
+### Ajustes sugeridos por activo (sobre la base)
+
+| Activo | pf sugerido | Razón |
+|---|---:|---|
+| BTC | 0.03 | Movimientos amplios; BE distance ~−28 % aceptable |
+| ETH | 0.03–0.05 | Volatilidad intermedia; validar 2026 aparte |
+| BNB | 0.02–0.05 | Buena acumulación de qty; Earn nativo |
+| XRP | 0.1 | Alta volatilidad; pf alto evita over-trading |
+
+### Accesorios y gates
+
+- **VolumenCompuesto** supera a **VolumenIncremental** en bull (2024 XRP).
+- **GreedFactor 0.1** aporta +1–2 pp en bull; moderado, no radical.
+- **Gates OFF** mejor en bull; en bear la diferencia es marginal con pf alto.
+- VI y VC son **mutuamente excluyentes**.
+
+### Dorothy vs HODL puro
+
+En bull fuerte, HODL gana en USDT (XRP 2024: HODL +238 % vs Dorothy +102 %).
+Dorothy aporta **rotación parcial** (cash + bag), **avg_entry trazable** y
+**checkpoints anuales** (`YEAR_CHECKPOINTS.md`, `year_checkpoint_*.json`).
+En lateral/bajista (ETH 24–26) Dorothy puede superar HODL en USDT.
+
+### Veredicto producción (bajo filosofía HODL+Earn)
+
+**Usable en producción** cuando:
+
+1. El activo ya está seleccionado para tenencia 3–5 años.
+2. `pf` se calibra por par (no hay seteo universal).
+3. La cadena mensual persiste estado entre meses/años.
+4. Bags estancadas se gradúan a Earn (manual o vía flag futuro).
+5. El capital es “a riesgo” y el peor caso es holdear la bag.
+
+Registro comparativo de corridas: [`runs_registry.md`](runs_registry.md).
+
+Datasets curados: [`reports/entregables/datasets/INDEX.md`](../../../reports/entregables/datasets/INDEX.md).

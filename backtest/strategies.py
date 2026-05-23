@@ -1,5 +1,8 @@
 """Built-in example strategies."""
 from backtest.exchange_filters import normalize_spot_buy_notional
+from decimal import Decimal
+
+from backtest.dorothy_accessories import _to_decimal, decimal_to_str, volumen_compuesto_notional
 from backtest.pecunator_trend import annotate_pecunator_gates
 from backtest.strategy_base import Signal, StrategyBase, StrategyContext
 
@@ -139,8 +142,11 @@ class DorothyHubStrategy(StrategyBase):
         max_rungs: int = 5,
         volumen_incremental: bool = False,
         volumen_incremental_multiplier: float = 1.05,
+        volumen_compuesto: bool = False,
+        volumen_compuesto_min_usdt: Decimal | float | str = Decimal("6"),
+        volumen_compuesto_greed_factor: Decimal | float | str = Decimal("0"),
         initial_run_cash: float | None = None,
-        require_trend_gate: bool = True,
+        require_trend_gate: bool = False,
         require_entry_gate: bool = False,
         symbol: str = "XRPUSDT",
         **params,
@@ -152,6 +158,9 @@ class DorothyHubStrategy(StrategyBase):
             max_rungs=max_rungs,
             volumen_incremental=volumen_incremental,
             volumen_incremental_multiplier=volumen_incremental_multiplier,
+            volumen_compuesto=volumen_compuesto,
+            volumen_compuesto_min_usdt=volumen_compuesto_min_usdt,
+            volumen_compuesto_greed_factor=volumen_compuesto_greed_factor,
             initial_run_cash=initial_run_cash,
             require_trend_gate=require_trend_gate,
             require_entry_gate=require_entry_gate,
@@ -165,6 +174,14 @@ class DorothyHubStrategy(StrategyBase):
         self.max_rungs = int(max_rungs)
         self.volumen_incremental = bool(volumen_incremental)
         self.volumen_incremental_multiplier = max(1.0, float(volumen_incremental_multiplier))
+        self.volumen_compuesto = bool(volumen_compuesto)
+        self.volumen_compuesto_min_usdt = max(Decimal("0"), _to_decimal(volumen_compuesto_min_usdt))
+        greed = _to_decimal(volumen_compuesto_greed_factor)
+        self.volumen_compuesto_greed_factor = max(Decimal("0"), greed)
+        if self.volumen_incremental and self.volumen_compuesto:
+            raise ValueError(
+                "volumen_incremental and volumen_compuesto are mutually exclusive; enable one accessory per run"
+            )
         self.initial_run_cash = (
             float(initial_run_cash) if initial_run_cash is not None and float(initial_run_cash) > 0 else None
         )
@@ -173,16 +190,47 @@ class DorothyHubStrategy(StrategyBase):
         self.symbol = str(symbol or "XRPUSDT").upper()
         self.active_sell_limits: list[float] = []
 
-    def _quote_notional_for_buy(self, ctx: StrategyContext) -> float:
-        """Base quote size with optional VolumenIncremental (experimental)."""
-        notional = float(self.quote_order_qty_usdt)
-        if self.volumen_incremental and self.initial_run_cash is not None:
+    def _quote_notional_for_buy(self, ctx: StrategyContext) -> tuple[float, dict]:
+        """Return (notional USDT, accessory metadata) for the next buy."""
+        base = float(self.quote_order_qty_usdt)
+        meta: dict = {}
+        notional = base
+
+        if self.volumen_compuesto:
+            if self.initial_run_cash is None:
+                raise ValueError("volumen_compuesto requires initial_run_cash > 0")
+            notional_dec, factor = volumen_compuesto_notional(
+                base_quote_usdt=_to_decimal(self.quote_order_qty_usdt),
+                equity=_to_decimal(ctx.equity),
+                initial_equity=_to_decimal(self.initial_run_cash),
+                min_quote_usdt=self.volumen_compuesto_min_usdt,
+                greed_factor=self.volumen_compuesto_greed_factor,
+            )
+            notional = float(notional_dec)
+            meta.update(
+                {
+                    "volumen_compuesto": True,
+                    "volumen_compuesto_factor": decimal_to_str(factor),
+                    "volumen_compuesto_greed_factor": decimal_to_str(self.volumen_compuesto_greed_factor),
+                    "volumen_compuesto_equity": decimal_to_str(_to_decimal(ctx.equity)),
+                    "volumen_compuesto_initial_equity": decimal_to_str(_to_decimal(self.initial_run_cash)),
+                    "volumen_compuesto_min_usdt": decimal_to_str(self.volumen_compuesto_min_usdt),
+                    "volumen_compuesto_notional_usdt": decimal_to_str(notional_dec),
+                }
+            )
+        elif self.volumen_incremental and self.initial_run_cash is not None:
             available = float(ctx.cash)
             if available > float(self.initial_run_cash) + 1e-9:
                 notional *= self.volumen_incremental_multiplier
+            meta["volumen_incremental"] = True
+            meta["volumen_incremental_multiplier"] = self.volumen_incremental_multiplier
+
         price = float(ctx.candle.get("price_source", ctx.candle.get("close", 0.0)))
         adj_notional, _qty = normalize_spot_buy_notional(self.symbol, notional, price)
-        return max(0.0, adj_notional)
+        meta["quote_notional_usdt"] = max(0.0, adj_notional)
+        if self.initial_run_cash is not None:
+            meta["initial_run_cash"] = self.initial_run_cash
+        return max(0.0, adj_notional), meta
 
     def _buy_signal(
         self,
@@ -196,17 +244,14 @@ class DorothyHubStrategy(StrategyBase):
                 reason="wait_entry_gate_blocked",
                 metadata={"entry_gate": str(ctx.candle.get("pec_entry_gate", "UNKNOWN"))},
             )
-        notional = self._quote_notional_for_buy(ctx)
+        notional, sizing_meta = self._quote_notional_for_buy(ctx)
         if notional <= 0 or ctx.cash < notional:
             return Signal(action="hold", reason="insufficient_cash")
         # Preserve target buy notional (after spot-filter normalization) even when
         # available cash is high; avoid forcing Dorothy buys to a 1% floor.
         size_pct = max(0.0, min(1.0, notional / max(ctx.cash, 1e-9)))
         meta = dict(metadata or {})
-        if self.volumen_incremental:
-            meta["volumen_incremental"] = True
-            meta["quote_notional_usdt"] = notional
-            meta["initial_run_cash"] = self.initial_run_cash
+        meta.update(sizing_meta)
         return Signal(action="buy", size_pct=size_pct, reason=reason, metadata=meta)
 
     def _entry_gate_allows_buy(self, ctx: StrategyContext) -> bool:
