@@ -22,6 +22,7 @@ Antes de cualquier descarga, backtest u optimización:
    - **Accesible y reutilizable** por otros bots, scripts y herramientas del proyecto (interfaz comun, manifest o subcomando CLI), sin duplicar logica.
    - **Documentada** en `README.md`/`docs/` con ejemplo y referencia desde la biblioteca (`library/`) cuando aplique.
 7. **Fin ultimo de la herramienta**: la busqueda y desarrollo de **artefactos** (bots, accesorios, presets, datasets curados, indicadores, reportes) que ayuden a generar los **mayores beneficios posibles en el menor tiempo posible**. Toda decision tecnica (datos, motor, persistencia, paralelismo, reportes) se prioriza segun ese criterio.
+8. **Briefing pre-run obligatorio**: antes de iniciar cualquier corrida, optimizacion o estudio encadenado, generar un artefacto de briefing (`RUN_BRIEFING.md` + `run_briefing.json`) con bot/estrategia, ventana de datos, parametros, malla de optimizacion si aplica, gates activos/desactivos, accesorios (p.ej. VolumenIncremental), flags del motor, plan de recursos y snapshot git. Debe quedar en la carpeta del entregable **antes** de ejecutar velas. Helper reutilizable: `backtest.run_briefing.write_run_briefing`; el script strict ya lo emite automaticamente.
 
 ## Quick start
 

@@ -140,6 +140,8 @@ class DorothyHubStrategy(StrategyBase):
         volumen_incremental: bool = False,
         volumen_incremental_multiplier: float = 1.05,
         initial_run_cash: float | None = None,
+        require_trend_gate: bool = True,
+        require_entry_gate: bool = False,
         symbol: str = "XRPUSDT",
         **params,
     ):
@@ -151,6 +153,8 @@ class DorothyHubStrategy(StrategyBase):
             volumen_incremental=volumen_incremental,
             volumen_incremental_multiplier=volumen_incremental_multiplier,
             initial_run_cash=initial_run_cash,
+            require_trend_gate=require_trend_gate,
+            require_entry_gate=require_entry_gate,
             symbol=symbol,
             **params,
         )
@@ -164,6 +168,8 @@ class DorothyHubStrategy(StrategyBase):
         self.initial_run_cash = (
             float(initial_run_cash) if initial_run_cash is not None and float(initial_run_cash) > 0 else None
         )
+        self.require_trend_gate = bool(require_trend_gate)
+        self.require_entry_gate = bool(require_entry_gate)
         self.symbol = str(symbol or "XRPUSDT").upper()
         self.active_sell_limits: list[float] = []
 
@@ -184,6 +190,12 @@ class DorothyHubStrategy(StrategyBase):
         reason: str,
         metadata: dict | None = None,
     ) -> Signal:
+        if not self._entry_gate_allows_buy(ctx):
+            return Signal(
+                action="hold",
+                reason="wait_entry_gate_blocked",
+                metadata={"entry_gate": str(ctx.candle.get("pec_entry_gate", "UNKNOWN"))},
+            )
         notional = self._quote_notional_for_buy(ctx)
         if notional <= 0 or ctx.cash < notional:
             return Signal(action="hold", reason="insufficient_cash")
@@ -197,14 +209,16 @@ class DorothyHubStrategy(StrategyBase):
             meta["initial_run_cash"] = self.initial_run_cash
         return Signal(action="buy", size_pct=size_pct, reason=reason, metadata=meta)
 
+    def _entry_gate_allows_buy(self, ctx: StrategyContext) -> bool:
+        if not self.require_entry_gate:
+            return True
+        return str(ctx.candle.get("pec_entry_gate", "CLEAR")) == "BLOCKED"
+
     def on_start(self, candles):
         annotate_pecunator_gates(candles, price_key="price_source")
 
     def on_bar(self, ctx: StrategyContext) -> Signal:
         price = float(ctx.candle.get("price_source", ctx.candle["close"]))
-        trend = str(ctx.candle.get("pec_trend", "UNKNOWN"))
-        if trend != "BULLISH":
-            return Signal(action="hold", reason="wait_trend_bullish", metadata={"trend": trend})
         if price <= 0:
             return Signal(action="hold", reason="invalid_price")
 
@@ -220,6 +234,11 @@ class DorothyHubStrategy(StrategyBase):
                     reason="take_profit_limit_hit",
                     metadata={"hit_limits": len(hit), "remaining_limits": len(self.active_sell_limits)},
                 )
+
+        if self.require_trend_gate:
+            trend = str(ctx.candle.get("pec_trend", "UNKNOWN"))
+            if trend != "BULLISH":
+                return Signal(action="hold", reason="wait_trend_bullish", metadata={"trend": trend})
 
         if self.max_rungs > 0 and len(self.active_sell_limits) >= self.max_rungs:
             return Signal(action="hold", reason="max_rungs_reached")

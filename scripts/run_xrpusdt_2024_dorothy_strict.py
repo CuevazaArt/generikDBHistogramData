@@ -15,8 +15,9 @@ from backtest.cleanup import abort_stale_runs
 from backtest.engine import EngineConfig
 from backtest.guards import ResourceGuard, ResourceGuardConfig
 from backtest.report_paths import strict_report_dir, write_manifest
-from backtest.registry import get_strategy
 from backtest.repro import git_snapshot
+from backtest.run_briefing import build_run_briefing_payload, write_run_briefing
+from backtest.registry import get_strategy
 from backtest.resources import detect_resources, estimate_worker_ram_bytes
 from backtest.runner import execute_and_persist
 from backtest.storage import summarize_run
@@ -75,7 +76,7 @@ def _enrich_strategy_params(
     quote_order_qty: float,
     max_rungs: int,
 ) -> Dict[str, Any]:
-    return {
+    params = {
         **combo,
         "quote_order_qty_usdt": float(quote_order_qty),
         "max_rungs": int(max_rungs),
@@ -83,7 +84,112 @@ def _enrich_strategy_params(
         "initial_run_cash": float(args.initial_cash),
         "volumen_incremental": bool(getattr(args, "volumen_incremental", False)),
         "volumen_incremental_multiplier": float(getattr(args, "volumen_incremental_multiplier", 1.05)),
+        "require_trend_gate": not bool(getattr(args, "no_trend_gate", False)),
     }
+    if bool(getattr(args, "require_entry_gate", False)):
+        params["require_entry_gate"] = True
+    return params
+
+
+def _windows_label(execution_windows: List[Tuple[str, int, int]]) -> str:
+    names = [str(w[0]) for w in execution_windows]
+    if not names:
+        return "(sin ventanas)"
+    if len(names) == 1:
+        return names[0]
+    return f"{names[0]}..{names[-1]}"
+
+
+def _dorothy_briefing_notes(args: argparse.Namespace) -> List[str]:
+    notes: List[str] = []
+    if bool(getattr(args, "no_trend_gate", False)):
+        notes.append(
+            "Gate de tendencia DESACTIVO: compras/DCAs posibles en BEARISH; "
+            "las ventas por TP se evaluan antes del gate."
+        )
+    if bool(getattr(args, "require_entry_gate", False)):
+        notes.append(
+            "Gate de entrada ACTIVO (live parity): compras solo con pec_entry_gate=BLOCKED."
+        )
+    if bool(getattr(args, "volumen_incremental", False)):
+        notes.append(
+            "VolumenIncremental activo: notional base x multiplier cuando cash > initial_run_cash."
+        )
+    if bool(getattr(args, "chain_by_month", False)):
+        notes.append("Cadena mensual: estado broker + active_sell_limits heredado entre ventanas.")
+    return notes
+
+
+def _write_pre_run_briefing(
+    *,
+    output_dir: str,
+    study_name: str,
+    args: argparse.Namespace,
+    execution_windows: List[Tuple[str, int, int]],
+    param_combos: List[Dict[str, float]],
+    profit_values: List[float],
+    margin_values: List[float],
+    quote_order_qty: float,
+    max_rungs: int,
+    window_candles: int,
+    resources: Dict[str, Any],
+    sample_strategy_params: Dict[str, Any],
+) -> Dict[str, str]:
+    """Emit RUN_BRIEFING before any backtest work starts (directiva operativa #8)."""
+    payload = build_run_briefing_payload(
+        study_name=study_name,
+        strategy="dorothy",
+        symbol=str(args.symbol),
+        interval=str(args.interval),
+        start_ts=int(args.start_ts),
+        end_ts=int(args.end_ts),
+        strategy_params=sample_strategy_params,
+        engine={
+            "db_path": str(args.db),
+            "initial_cash": float(args.initial_cash),
+            "fee_rate": float(args.fee_rate),
+            "slippage_bps": float(args.slippage_bps),
+            "loop_seconds": int(args.loop_seconds),
+            "events_mode": "lite",
+            "snapshot_seconds": 3600,
+            "quote_order_qty_usdt": float(quote_order_qty),
+            "max_rungs": int(max_rungs),
+        },
+        execution={
+            "chain_by_month": bool(getattr(args, "chain_by_month", False)),
+            "execution_windows": execution_windows,
+            "windows_label": _windows_label(execution_windows),
+            "window_candle_count": int(window_candles),
+            "executor": str(getattr(args, "executor", "serial") or "serial"),
+            "n_jobs": int(getattr(args, "n_jobs", 1) or 1),
+            "seed_run_id": getattr(args, "seed_run_id", None),
+        },
+        optimization={
+            "profit_factor_grid": profit_values,
+            "margin_drop_grid": margin_values,
+            "param_combos": param_combos,
+        },
+        accessories={
+            "volumen_incremental": {
+                "active": bool(getattr(args, "volumen_incremental", False)),
+                "detail": f"multiplier={float(getattr(args, 'volumen_incremental_multiplier', 1.05))}",
+            },
+        },
+        gates={
+            "trend_ha_bullish": {
+                "active": not bool(getattr(args, "no_trend_gate", False)),
+                "description": "Gate 1: pec_trend == BULLISH (Heikin-Ashi MA1>MA2)",
+            },
+            "entry_price_below_open": {
+                "active": bool(getattr(args, "require_entry_gate", False)),
+                "description": "Gate 2: pec_entry_gate == BLOCKED (precio < open vela)",
+            },
+        },
+        resource_plan=resources,
+        reproducibility=git_snapshot(),
+        notes=_dorothy_briefing_notes(args),
+    )
+    return write_run_briefing(output_dir, payload)
 
 
 def _configure_compute_threads(cpu_cap_pct: float) -> int:
@@ -482,6 +588,22 @@ def run(args: argparse.Namespace) -> None:
         title=f"Strict run {study_name}",
         summary="Quarterly chained strict run artifacts.",
     )
+    sample_params = _enrich_strategy_params(param_combos[0], args, quote_order_qty, max_rungs)
+    briefing_paths = _write_pre_run_briefing(
+        output_dir=output_dir,
+        study_name=study_name,
+        args=args,
+        execution_windows=execution_windows,
+        param_combos=param_combos,
+        profit_values=profit_values,
+        margin_values=margin_values,
+        quote_order_qty=quote_order_qty,
+        max_rungs=max_rungs,
+        window_candles=window_candles,
+        resources=resources,
+        sample_strategy_params=sample_params,
+    )
+    print(json.dumps({"pre_run_briefing": briefing_paths}, ensure_ascii=False), flush=True)
     strategy_cls = get_strategy("dorothy")
     telemetry = TelemetryRecorder(TelemetryConfig(output_dir=output_dir))
     telemetry.sample(
@@ -734,6 +856,21 @@ def main() -> None:
         type=float,
         default=1.05,
         help="Multiplicador cuando cash disponible supera initial_cash de la corrida.",
+    )
+    parser.add_argument(
+        "--no-trend-gate",
+        action="store_true",
+        help="Desactiva gate 1 (pec_trend BULLISH). Las ventas por TP siguen activas.",
+    )
+    parser.add_argument(
+        "--no-entry-gate",
+        action="store_true",
+        help="Sin efecto si entry gate no esta activo; usar --require-entry-gate para live parity.",
+    )
+    parser.add_argument(
+        "--require-entry-gate",
+        action="store_true",
+        help="Activa gate 2 (pec_entry_gate BLOCKED) para compras, como en live Pecunator.",
     )
     run(parser.parse_args())
 

@@ -27,6 +27,17 @@ Los artefactos quedan en `reports/entregables/datasets/<name>/` y su
 - archivos preparados (`prepared_data.files`), usando cache Parquet cuando esta
   disponible o snapshot JSONL de respaldo.
 
+## Briefing pre-run (RUN_BRIEFING)
+
+Antes de ejecutar una corrida pesada o comparativa, el proyecto debe emitir
+`RUN_BRIEFING.md` y `run_briefing.json` en la carpeta del estudio. El briefing
+documenta todo lo que puede impactar el desempeno: bot, params, gates,
+accesorios, malla, motor, recursos y commit git.
+
+Los strict runs en `scripts/run_xrpusdt_2024_dorothy_strict.py` lo generan
+automaticamente al crear `output_dir`. Para otros flujos usar
+`backtest.run_briefing.write_run_briefing`.
+
 ## Cuando se usa DuckDB y cuando SQLite
 
 El selector vive en `backtest/plots.py` y aplica la regla del backend
