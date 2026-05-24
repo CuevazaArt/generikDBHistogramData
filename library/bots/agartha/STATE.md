@@ -1,28 +1,51 @@
-# Estado de sesión — handoff
+# Estado Agartha — sesion en curso
 
-Actualizado: 2026-05-24 (UTC)
+Actualizado: 2026-05-24 16:30 UTC
 
-## Completado (Louise / Lucky)
+## Hecho hoy
 
-- Instrumento **Louise HODL+Earn**: preset `library/bots/louise/presets/hodl_earn_accumulate.yaml`
-- Corridas encadenadas 2024→2026 sin TP (`mdf=0.04`, `loop=29`): ETH, XRP, BTC, BNB
-  - XRP alcanzó +200 USDT en nov 2024 (+230 total)
-  - Entregables en `reports/entregables/strict/louise_*_chain_*`
-- **Lucky** redefinido como bot **especialista independiente** (evento: mínimo local)
-- Scripts: `scripts/run_louise_ethusdt_pilot.py`, `scripts/run_louise_multi_compare.py`
-- Código: `target_profit_pct <= 0` desactiva TP; Louise `export_state` para cadena mensual
+- `AgarthaStrategy` implementada en `backtest/strategies.py`:
+  - Compra inicial fija (`quote_order_qty_usdt`)
+  - Trailing stop dinamico (`trailing_stop_pct`) sobre peak
+  - Activacion condicional (`activation_profit_pct`)
+  - Breakeven lock (`breakeven_lock_pct`)
+  - Time stop opcional (`max_holding_bars`)
+  - Partial TP opcional (`partial_tp_pct` / `partial_tp_size_pct`)
+  - Single-shot por default (`allow_reentry=False`)
+  - Estado serializable via `export_state` / `import_state`
+- Registry: `agartha` registrado, `params_from_cli` y `suggest_params` con
+  bloques propios.
+- CLI: flags Agartha en `p_run` y `p_opt` (`--trailing_stop_pct`,
+  `--activation_profit_pct`, etc.).
+- Manifest + 3 presets: `default`, `moonshot_protected`, `partial_then_moon`.
+- Notas: tesis, logica, parametros, despliegue cartera, accesorios futuros.
+- Tests: `tests/test_agartha.py` (13 casos, todos verdes).
+- Suite global: `test_registry` + `test_library` pasan sin regresion.
 
-## Tags recientes
+## Pendiente (proximo)
 
-- `v2026.05.24-louise-lucky-hodl` — pilot scripts + HODL instrument
-- `004e09c` — Lucky specialist identity (manifest + notes)
+1. Conector live REST/WS Alpha (autenticacion, LIMIT-only).
+2. Backtests reales sobre datos Alpha descargados (`cli.py --mode alpha_api`).
+3. Orchestrator multi-instancia para cartera N x Agartha.
+4. Screening del universo Alpha (token list + filtros liquidez/holders).
+5. Accesorios: ATR trailing, volume gate, multi-rung partial.
+6. Runs registry con metricas tipicas (hit rate, payout, Sharpe).
 
-## Agartha — siguiente sesión
+## Comandos de referencia
 
-1. Definir tesis de trading (scalp / swing / sniper listing / exit rules)
-2. Adapter REST Alpha trade (órdenes autenticadas) + WS market data
-3. Normalizar símbolos `ALPHA_<id>USDT` y filtros exchange
-4. Backtest con `cli.py --mode alpha_api` + datos en `klines.db`
-5. Reglas de riesgo: liquidez mínima, PERCENT_PRICE, delisting/offline
+Run unico:
 
-Ver [`notes.md`](notes.md) — investigación Binance Alpha API.
+```powershell
+$env:PYTHONPATH='.'
+python backtest_cli.py --db klines.db run `
+  --strategy agartha --symbol ALPHA_175USDT --interval 1m `
+  --initial_cash 100 --quote_order_qty_usdt 10 `
+  --trailing_stop_pct 30 --activation_profit_pct 50 --breakeven_lock_pct 100
+```
+
+Tests:
+
+```powershell
+$env:PYTHONPATH='.'
+python -m pytest tests/test_agartha.py -q
+```

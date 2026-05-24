@@ -1,27 +1,31 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-05-24T15:44:56.993708+00:00",
+  "generated_at": "2026-05-24T16:23:12.537039+00:00",
   "entries": [
     {
       "name": "agartha",
       "kind": "bot",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "dir": "library/bots/agartha",
       "tags": [
         "alpha",
         "binance-alpha",
+        "moonshot",
+        "trailing-stop",
         "high-risk",
-        "memecoin",
-        "wip",
-        "design"
+        "memecoin"
       ],
-      "description": "Bot de trading para el mercado Binance Alpha (tokens semilla, alto riesgo, memecoins). En diseño desde cero.",
-      "entry_point": null,
+      "description": "Moonshot trailing para Binance Alpha: una compra fija, sin stop-loss, trailing stop dinamico que protege ganancias. Una instancia = un simbolo.",
+      "entry_point": "backtest.strategies:AgarthaStrategy",
       "registry_aliases": [],
-      "reference_only": true,
+      "reference_only": false,
       "notes_file": "notes.md",
       "preset_dir": "presets",
-      "presets": []
+      "presets": [
+        "default",
+        "moonshot_protected",
+        "partial_then_moon"
+      ]
     },
     {
       "name": "anti_louise",
@@ -308,6 +312,6 @@
     "bots": 15,
     "indicators": 0,
     "tools": 0,
-    "reference_only": 4
+    "reference_only": 3
   }
 }

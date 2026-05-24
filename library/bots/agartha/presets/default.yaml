@@ -1,0 +1,10 @@
+# Agartha default: moonshot + trailing stop puro.
+# Capital de riesgo 10 USDT por instancia; trailing 30% del peak; sin filtros.
+quote_order_qty_usdt: 10.0
+trailing_stop_pct: 30.0
+activation_profit_pct: 0.0
+max_holding_bars: 0
+breakeven_lock_pct: 0.0
+partial_tp_pct: 0.0
+partial_tp_size_pct: 0.0
+allow_reentry: false

@@ -1,0 +1,11 @@
+# Agartha "Protected Moonshot": activacion despues de +50% y breakeven lock a +100%.
+# Idea: solo arma el trailing si el simbolo ya demostro impulso; una vez al 2x
+# el floor jamas baja del entry (no pierdes capital en eventos exitosos).
+quote_order_qty_usdt: 10.0
+trailing_stop_pct: 35.0
+activation_profit_pct: 50.0
+max_holding_bars: 0
+breakeven_lock_pct: 100.0
+partial_tp_pct: 0.0
+partial_tp_size_pct: 0.0
+allow_reentry: false

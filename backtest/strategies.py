@@ -770,3 +770,199 @@ class AntiLouiseLuckyStrategy(AntiLouiseStrategy):
         if signal.reason == "anti_louise_lucky_strike_high":
             return
         super().on_fill(fill, signal, ctx)
+
+
+class AgarthaStrategy(StrategyBase):
+    """Moonshot trailing strategy for Binance Alpha high-volatility tokens.
+
+    Tesis: una sola compra fija (notional pequeño, capital de riesgo) sobre un
+    simbolo elegido; sin stop-loss, con trailing stop dinamico que sube con el
+    precio para proteger ganancia ya capturada. Se asume bag puede ir a cero;
+    el upside esperado (x5/x10/x20) en otras instancias amortiza fracasos.
+
+    Cada instancia opera un (1) simbolo. La diversificacion se logra desplegando
+    N instancias en paralelo. Disenada para admitir accesorios futuros
+    (partial TP, breakeven lock, time stop, re-entry) via params opcionales.
+
+    Parametros:
+        quote_order_qty_usdt: notional de la compra inicial (capital de riesgo).
+        trailing_stop_pct: % de retroceso desde el pico permitido antes de vender.
+        activation_profit_pct: % de ganancia minima sobre entry antes de activar
+            el trailing (0 = activo desde la primera vela; default 0).
+        max_holding_bars: tope de velas en posicion (0 = sin limite).
+        breakeven_lock_pct: cuando price >= entry*(1+breakeven_lock_pct/100),
+            el trailing nunca baja del entry (lock de breakeven). 0 = off.
+        partial_tp_pct / partial_tp_size_pct: TP parcial opcional al alcanzar
+            X% sobre entry, vendiendo Y% de la posicion. 0 = off.
+        allow_reentry: si True, tras cerrar puede volver a comprar (default False
+            -- una sola apuesta por instancia).
+    """
+
+    name = "agartha"
+
+    def __init__(
+        self,
+        quote_order_qty_usdt: float = 10.0,
+        trailing_stop_pct: float = 30.0,
+        activation_profit_pct: float = 0.0,
+        max_holding_bars: int = 0,
+        breakeven_lock_pct: float = 0.0,
+        partial_tp_pct: float = 0.0,
+        partial_tp_size_pct: float = 0.0,
+        allow_reentry: bool = False,
+        **params,
+    ):
+        super().__init__(
+            quote_order_qty_usdt=quote_order_qty_usdt,
+            trailing_stop_pct=trailing_stop_pct,
+            activation_profit_pct=activation_profit_pct,
+            max_holding_bars=max_holding_bars,
+            breakeven_lock_pct=breakeven_lock_pct,
+            partial_tp_pct=partial_tp_pct,
+            partial_tp_size_pct=partial_tp_size_pct,
+            allow_reentry=allow_reentry,
+            **params,
+        )
+        self.quote_order_qty_usdt = max(0.1, float(quote_order_qty_usdt))
+        self.trailing_stop_pct = max(0.0, float(trailing_stop_pct))
+        self.activation_profit_pct = max(0.0, float(activation_profit_pct))
+        self.max_holding_bars = max(0, int(max_holding_bars))
+        self.breakeven_lock_pct = max(0.0, float(breakeven_lock_pct))
+        self.partial_tp_pct = max(0.0, float(partial_tp_pct))
+        self.partial_tp_size_pct = max(0.0, min(1.0, float(partial_tp_size_pct)))
+        self.allow_reentry = bool(allow_reentry)
+        # Estado serializable
+        self.entry_price: float = 0.0
+        self.peak_price: float = 0.0
+        self.bars_in_position: int = 0
+        self.trailing_active: bool = False
+        self.partial_tp_done: bool = False
+        self.cycles_closed: int = 0
+
+    def _reset_position_state(self) -> None:
+        self.entry_price = 0.0
+        self.peak_price = 0.0
+        self.bars_in_position = 0
+        self.trailing_active = False
+        self.partial_tp_done = False
+
+    def on_bar(self, ctx: StrategyContext) -> Signal:
+        price = float(ctx.candle.get("price_source", ctx.candle["close"]))
+        if price <= 0:
+            return Signal(action="hold", reason="invalid_price")
+
+        # Sin posicion: comprar si nunca compramos (o si re-entry esta permitido).
+        if ctx.position_qty <= 0 or self.entry_price <= 0:
+            if self.cycles_closed > 0 and not self.allow_reentry:
+                return Signal(action="hold", reason="agartha_single_shot_done")
+            if ctx.cash < self.quote_order_qty_usdt:
+                return Signal(action="hold", reason="insufficient_cash")
+            size_pct = max(0.01, min(1.0, self.quote_order_qty_usdt / max(ctx.cash, 1e-9)))
+            return Signal(
+                action="buy",
+                size_pct=size_pct,
+                reason="agartha_initial_entry",
+                metadata={"target_notional": self.quote_order_qty_usdt},
+            )
+
+        # En posicion: actualizar peak y contador de barras.
+        self.bars_in_position += 1
+        if price > self.peak_price:
+            self.peak_price = price
+
+        # Time stop (si configurado): cierra todo por exceso de tiempo.
+        if self.max_holding_bars > 0 and self.bars_in_position >= self.max_holding_bars:
+            return Signal(
+                action="sell",
+                size_pct=1.0,
+                reason="agartha_time_stop",
+                metadata={"bars_in_position": self.bars_in_position},
+            )
+
+        # Activacion del trailing: requiere superar activation_profit_pct.
+        if not self.trailing_active and self.activation_profit_pct > 0:
+            activate_at = self.entry_price * (1.0 + self.activation_profit_pct / 100.0)
+            if price >= activate_at:
+                self.trailing_active = True
+        elif not self.trailing_active and self.activation_profit_pct == 0:
+            self.trailing_active = True
+
+        # Partial TP opcional (una sola vez).
+        if (
+            not self.partial_tp_done
+            and self.partial_tp_pct > 0
+            and self.partial_tp_size_pct > 0
+        ):
+            partial_trigger = self.entry_price * (1.0 + self.partial_tp_pct / 100.0)
+            if price >= partial_trigger:
+                self.partial_tp_done = True
+                return Signal(
+                    action="sell",
+                    size_pct=self.partial_tp_size_pct,
+                    reason="agartha_partial_tp",
+                    metadata={"partial_trigger": partial_trigger, "size_pct": self.partial_tp_size_pct},
+                )
+
+        # Trailing stop: vender 100% si el precio cae mas de trailing_stop_pct
+        # desde el peak. Con breakeven_lock_pct, el floor nunca baja del entry.
+        if self.trailing_active and self.trailing_stop_pct > 0 and self.peak_price > 0:
+            trail_floor = self.peak_price * (1.0 - self.trailing_stop_pct / 100.0)
+            if self.breakeven_lock_pct > 0:
+                breakeven_at = self.entry_price * (1.0 + self.breakeven_lock_pct / 100.0)
+                if self.peak_price >= breakeven_at:
+                    trail_floor = max(trail_floor, self.entry_price)
+            if price <= trail_floor:
+                return Signal(
+                    action="sell",
+                    size_pct=1.0,
+                    reason="agartha_trailing_stop",
+                    metadata={
+                        "peak_price": self.peak_price,
+                        "trail_floor": trail_floor,
+                        "entry_price": self.entry_price,
+                        "bars_in_position": self.bars_in_position,
+                    },
+                )
+
+        return Signal(action="hold")
+
+    def on_fill(self, fill, signal: Signal, ctx: StrategyContext) -> None:
+        _ = ctx
+        side = fill.get("side")
+        fill_price = float(fill.get("price", 0.0) or 0.0)
+        if side == "buy" and fill_price > 0:
+            # Compra inicial: ancla precio, resetea peak/bars/trailing.
+            self.entry_price = fill_price
+            self.peak_price = fill_price
+            self.bars_in_position = 0
+            self.trailing_active = self.activation_profit_pct == 0
+            self.partial_tp_done = False
+        elif side == "sell":
+            # Si la venta dejo posicion residual (partial TP) seguimos.
+            try:
+                residual = float(ctx.position_qty)
+            except Exception:
+                residual = 0.0
+            if residual <= 1e-12:
+                self.cycles_closed += 1
+                self._reset_position_state()
+
+    def export_state(self) -> dict:
+        return {
+            "entry_price": float(self.entry_price),
+            "peak_price": float(self.peak_price),
+            "bars_in_position": int(self.bars_in_position),
+            "trailing_active": bool(self.trailing_active),
+            "partial_tp_done": bool(self.partial_tp_done),
+            "cycles_closed": int(self.cycles_closed),
+        }
+
+    def import_state(self, state: dict) -> None:
+        if not isinstance(state, dict):
+            return
+        self.entry_price = float(state.get("entry_price", 0.0) or 0.0)
+        self.peak_price = float(state.get("peak_price", 0.0) or 0.0)
+        self.bars_in_position = int(state.get("bars_in_position", 0) or 0)
+        self.trailing_active = bool(state.get("trailing_active", False))
+        self.partial_tp_done = bool(state.get("partial_tp_done", False))
+        self.cycles_closed = int(state.get("cycles_closed", 0) or 0)

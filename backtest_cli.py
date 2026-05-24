@@ -1165,6 +1165,21 @@ def main() -> None:
     p_run.add_argument("--margin_drop_factor", type=float, default=0.004)
     p_run.add_argument("--quote_order_qty_usdt", type=float, default=8.0)
     p_run.add_argument("--max_rungs", type=int, default=5)
+    # --- Agartha (moonshot + trailing): aplican solo cuando --strategy agartha ---
+    p_run.add_argument("--trailing_stop_pct", type=float, default=30.0,
+                       help="Agartha: % de retroceso desde el pico antes de vender.")
+    p_run.add_argument("--activation_profit_pct", type=float, default=0.0,
+                       help="Agartha: % de ganancia minima antes de activar trailing (0=desde inicio).")
+    p_run.add_argument("--max_holding_bars", type=int, default=0,
+                       help="Agartha: time stop en barras (0=sin limite).")
+    p_run.add_argument("--breakeven_lock_pct", type=float, default=0.0,
+                       help="Agartha: si peak>=entry*(1+x/100), el trailing nunca baja del entry.")
+    p_run.add_argument("--partial_tp_pct", type=float, default=0.0,
+                       help="Agartha: TP parcial a este % sobre entry (0=off).")
+    p_run.add_argument("--partial_tp_size_pct", type=float, default=0.0,
+                       help="Agartha: fraccion de la posicion a vender en TP parcial (0..1).")
+    p_run.add_argument("--allow_reentry", action="store_true",
+                       help="Agartha: permitir re-entrada tras cierre (default single-shot).")
     # --- Fase 2: checkpoint flags (only on p_run; other subparsers untouched) ---
     p_run.add_argument("--checkpoint_every_bars", type=int, default=None)
     p_run.add_argument("--checkpoint_every_sim_seconds", type=int, default=None)
@@ -1191,6 +1206,14 @@ def main() -> None:
     p_opt.add_argument("--timeout", type=int)
     p_opt.add_argument("--quote_order_qty_usdt", type=float, default=8.0)
     p_opt.add_argument("--max_rungs", type=int, default=5)
+    # Agartha defaults para optimize (los rangos se barren via search_overrides)
+    p_opt.add_argument("--trailing_stop_pct", type=float, default=30.0)
+    p_opt.add_argument("--activation_profit_pct", type=float, default=0.0)
+    p_opt.add_argument("--max_holding_bars", type=int, default=0)
+    p_opt.add_argument("--breakeven_lock_pct", type=float, default=0.0)
+    p_opt.add_argument("--partial_tp_pct", type=float, default=0.0)
+    p_opt.add_argument("--partial_tp_size_pct", type=float, default=0.0)
+    p_opt.add_argument("--allow_reentry", action="store_true")
     p_opt.add_argument(
         "--executor",
         choices=["ray", "joblib", "serial"],

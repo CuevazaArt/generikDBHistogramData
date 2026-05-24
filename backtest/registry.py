@@ -4,6 +4,7 @@ from typing import Any, Callable, Dict, Optional, Type
 
 from backtest.strategy_base import StrategyBase
 from backtest.strategies import (
+    AgarthaStrategy,
     AntiLouiseLuckyStrategy,
     AntiLouiseStrategy,
     DorothyBacktestStrategy,
@@ -30,6 +31,7 @@ STRATEGY_REGISTRY: Dict[str, Type[StrategyBase]] = {
     AntiLouiseStrategy.name: AntiLouiseStrategy,
     LouiseLuckyStrategy.name: LouiseLuckyStrategy,
     AntiLouiseLuckyStrategy.name: AntiLouiseLuckyStrategy,
+    AgarthaStrategy.name: AgarthaStrategy,
     # Backward-compatible aliases from previous naming.
     "dorothy_hub": DorothyHubStrategy,
     "elphaba_hub": ElphabaHubStrategy,
@@ -78,6 +80,7 @@ def params_from_cli(args: Any, strategy_name: str) -> Dict[str, Any]:
         "anti_louise_lucky",
         "thusnelda",
         "sma_cross",
+        "agartha",
     ):
         return override(args)
     if key in ("dorothy", "dorothy_hub"):
@@ -138,6 +141,17 @@ def params_from_cli(args: Any, strategy_name: str) -> Dict[str, Any]:
         return params
     if key == "thusnelda":
         return {"placeholder_level": int(getattr(args, "placeholder_level", 1))}
+    if key == "agartha":
+        return {
+            "quote_order_qty_usdt": float(getattr(args, "quote_order_qty_usdt", 10.0)),
+            "trailing_stop_pct": float(getattr(args, "trailing_stop_pct", 30.0)),
+            "activation_profit_pct": float(getattr(args, "activation_profit_pct", 0.0)),
+            "max_holding_bars": int(getattr(args, "max_holding_bars", 0)),
+            "breakeven_lock_pct": float(getattr(args, "breakeven_lock_pct", 0.0)),
+            "partial_tp_pct": float(getattr(args, "partial_tp_pct", 0.0)),
+            "partial_tp_size_pct": float(getattr(args, "partial_tp_size_pct", 0.0)),
+            "allow_reentry": bool(getattr(args, "allow_reentry", False)),
+        }
     return {
         "fast": int(args.fast),
         "slow": int(args.slow),
@@ -246,6 +260,7 @@ def suggest_params(trial: Any, strategy_name: str, search_overrides: Optional[Di
         "anti_louise_lucky",
         "thusnelda",
         "sma_cross",
+        "agartha",
     ):
         return override(trial, overrides)
     if key in ("dorothy", "dorothy_hub"):
@@ -332,6 +347,22 @@ def suggest_params(trial: Any, strategy_name: str, search_overrides: Optional[Di
         return params
     if key == "thusnelda":
         return {"placeholder_level": int(trial.suggest_int("placeholder_level", 1, 3))}
+    if key == "agartha":
+        ts_min, ts_max = _get_float_range(overrides, "trailing_stop_pct_min", "trailing_stop_pct_max", 10.0, 60.0)
+        ap_min, ap_max = _get_float_range(overrides, "activation_profit_pct_min", "activation_profit_pct_max", 0.0, 50.0)
+        be_min, be_max = _get_float_range(overrides, "breakeven_lock_pct_min", "breakeven_lock_pct_max", 0.0, 30.0)
+        mh_min, mh_max = _get_int_range(overrides, "max_holding_bars_min", "max_holding_bars_max", 0, 0)
+        params = {
+            "quote_order_qty_usdt": float(overrides.get("quote_order_qty_usdt", 10.0)),
+            "trailing_stop_pct": float(trial.suggest_float("trailing_stop_pct", ts_min, ts_max)),
+            "activation_profit_pct": float(trial.suggest_float("activation_profit_pct", ap_min, ap_max)),
+            "breakeven_lock_pct": float(trial.suggest_float("breakeven_lock_pct", be_min, be_max)),
+            "max_holding_bars": int(trial.suggest_int("max_holding_bars", mh_min, mh_max)) if mh_max > 0 else 0,
+            "partial_tp_pct": 0.0,
+            "partial_tp_size_pct": 0.0,
+            "allow_reentry": False,
+        }
+        return params
     fast_min, fast_max = _get_int_range(overrides, "fast_min", "fast_max", 5, 40)
     slow_min, slow_max = _get_int_range(overrides, "slow_min", "slow_max", 20, 120)
     params = {
