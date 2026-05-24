@@ -131,11 +131,33 @@ son **adaptaciones de produccion** que ya estan en el codigo.
 | **Quote asset variable (USDT vs USDC)** | PHAROS solo USDC en Alpha; BILL solo USDT | `resolve_alpha_symbol` cruza con `get-exchange-info` y elige el quote tradeable real |
 | **API code `-1121 Invalid symbol`** para tokens muy nuevos | PHAROS antes del fix | Añadido a `ALPHA_FATAL_CODES`; ya no retry, raise inmediato visible |
 | **End-of-stream `-1000 No records found`** | BILL al final del histórico | Tratado como termino normal de paginacion |
+| **Mismo human symbol con multiples alphaIds** (cross-chain duplicates) | PLAY: `ALPHA_822` (Base, activo, liq 831k) y `ALPHA_300` (BSC, offline+offsell) | Scoring `(not offline, not offsell, liquidity, volume24h)`; warning con alternativas descartadas |
 
 Cuando aparezca una nueva regla:
 1. Logguearla en este archivo (tabla anterior).
 2. Adaptar `binance_hist_downloader.py` o `agartha_*` segun corresponda.
-3. Anotar el fix en el commit message como `(adapt: <symbol>)`.
+3. Añadir test en `tests/test_alpha_resolver.py`.
+4. Anotar el fix en el commit message como `(adapt: <symbol>)`.
+
+---
+
+## Rutina obligatoria del tester (resolucion de simbolo Alpha)
+
+**Antes de descargar klines o lanzar runs**, todo simbolo Alpha pasa por
+estas validaciones (implementadas en `BinanceDownloader.resolve_alpha_symbol`
+y replicadas en `download_and_prepare_alpha.py` + `agartha_alpha_study.py`):
+
+1. **Token list lookup**: encontrar el simbolo humano en `/bapi/.../token/list`.
+2. **De-duplicacion por alphaId**: si el mismo symbol aparece N veces (distintos
+   chains), elegir por scoring `(not offline, not offsell, liquidity, volume24h)`
+   descendente. Emitir warning listando alternativas descartadas.
+3. **Cross-check con exchange-info**: validar que existe par tradeable y detectar
+   el **quote correcto** (USDT vs USDC). Si el quote pedido no esta, fallback
+   al primer pair disponible con warning.
+4. **Persistir** el simbolo humano normalizado (`PHAROS` -> `PHAROSUSDC`) en
+   `klines.db` y en `alpha_token.json` para trazabilidad.
+
+Cobertura de tests: `tests/test_alpha_resolver.py` (regresion de cada regla).
 
 ---
 

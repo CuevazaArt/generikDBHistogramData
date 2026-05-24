@@ -38,13 +38,32 @@ def _utc_iso(ms: int) -> str:
 
 
 def _resolve_alpha_metadata(dl: BinanceDownloader, base: str) -> dict:
-    """Find token metadata in the Alpha token list (case-insensitive)."""
+    """Find token metadata; if multiple alphaIds share the symbol pick the best
+    (activo > offline, mayor liquidez, mayor volume24h). Routine validation.
+    """
     tokens = dl.get_alpha_token_list()
     base_u = base.upper()
-    for t in tokens:
-        if str(t.get("symbol", "")).upper() == base_u:
-            return t
-    raise SystemExit(f"Token '{base}' not found in Alpha token list.")
+    cands = [t for t in tokens if str(t.get("symbol", "")).upper() == base_u]
+    if not cands:
+        raise SystemExit(f"Token '{base}' not found in Alpha token list.")
+    def _score(t: dict) -> tuple:
+        try:
+            liq = float(t.get("liquidity") or 0.0)
+        except Exception:
+            liq = 0.0
+        try:
+            vol = float(t.get("volume24h") or 0.0)
+        except Exception:
+            vol = 0.0
+        return (not bool(t.get("offline", False)), not bool(t.get("offsell", False)), liq, vol)
+    cands = sorted(cands, key=_score, reverse=True)
+    if len(cands) > 1:
+        skipped = [
+            f"{c.get('alphaId')}({c.get('chainName')},offline={c.get('offline')})"
+            for c in cands[1:]
+        ]
+        print(f"[alpha-prep] '{base}' tiene {len(cands)} candidatos; uso {cands[0].get('alphaId')}; alternativas: {skipped}")
+    return cands[0]
 
 
 def _window_in_db(db_path: str, symbol: str, interval: str) -> Tuple[Optional[int], Optional[int], int]:
@@ -100,19 +119,32 @@ def main() -> int:
         tradeable = []
     if tradeable:
         preferred = f"{alpha_id}{requested_quote}"
-        if preferred in tradeable:
-            alpha_symbol = preferred
-        else:
-            alpha_symbol = tradeable[0]
-            print(
-                f"[alpha-prep] '{requested_quote}' no es tradeable para {base}; "
-                f"disponibles={tradeable}; uso '{alpha_symbol}'."
+        # Probe cada candidato con un sample mini para detectar pares vacios
+        # (registrados en exchange-info pero sin velas reales).
+        ordered = [preferred] + [t for t in tradeable if t != preferred] if preferred in tradeable else list(tradeable)
+        alpha_symbol = None
+        for cand in ordered:
+            try:
+                sample = list(
+                    dl.download_klines_alpha_api(cand, args.interval, limit=5)
+                )
+            except Exception as exc:
+                print(f"[alpha-prep] probe {cand} falló: {exc}; pruebo siguiente.")
+                continue
+            if sample:
+                alpha_symbol = cand
+                break
+            else:
+                print(f"[alpha-prep] probe {cand}: 0 velas; pruebo siguiente.")
+        if alpha_symbol is None:
+            raise SystemExit(
+                f"Ningun par tradeable de {alpha_id} devolvio velas: {tradeable}"
             )
-            # Also rewrite the human symbol to reflect the actual quote.
-            new_quote = alpha_symbol[len(alpha_id):]
-            if new_quote and new_quote != requested_quote:
-                symbol_human = f"{base}{new_quote}"
-                print(f"[alpha-prep] human symbol normalizado a '{symbol_human}'.")
+        actual_quote = alpha_symbol[len(alpha_id):]
+        if actual_quote != requested_quote:
+            print(f"[alpha-prep] quote efectivo '{actual_quote}' (pedido '{requested_quote}').")
+            symbol_human = f"{base}{actual_quote}"
+            print(f"[alpha-prep] human symbol normalizado a '{symbol_human}'.")
     else:
         alpha_symbol = f"{alpha_id}{requested_quote}"
     listing_ms = int(meta.get("listingTime") or 0)

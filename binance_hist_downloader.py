@@ -190,13 +190,20 @@ class BinanceDownloader:
     def resolve_alpha_symbol(self, symbol: str) -> str:
         """Map human symbol (e.g. PHAROSUSDT) to a tradeable Alpha pair.
 
-        Process:
+        Routine validations (every call):
           1. Strip the requested quote suffix (USDT/USDC/...).
           2. Look up the alphaId in the token list.
-          3. Cross-check exchange-info for actual tradeable pairs for that
-             alphaId; if the requested quote is not tradeable, fall back to
-             the first tradeable pair and emit a warning (typical: requested
-             USDT but token only trades USDC, or vice versa).
+          3. **De-duplicate** when the same human symbol exists for multiple
+             alphaIds across chains: prefer NOT offline/offsell, then highest
+             liquidity, then highest volume24h. Emit a warning listing
+             alternatives.
+          4. Cross-check exchange-info for actual tradeable pairs for the
+             chosen alphaId; if the requested quote is not tradeable, fall
+             back to the first tradeable pair and emit a warning.
+
+        These steps ARE the canonical tester routine for Alpha symbols:
+        cualquier nueva instancia debe pasar por estas validaciones antes
+        de descargar klines o lanzar runs (ver ALPHA_STUDY_MODEL.md).
         """
         requested = symbol.strip().upper()
         if requested.startswith("ALPHA_"):
@@ -211,20 +218,62 @@ class BinanceDownloader:
                 f"Cannot resolve Alpha symbol for '{symbol}': unsupported/unknown quote asset suffix"
             )
         base = requested[: -len(quote)]
+
         tokens = self.get_alpha_token_list()
-        symbol_to_alpha_id: Dict[str, str] = {}
+        # Recoger TODOS los candidates (mismo symbol puede tener N alphaIds).
+        candidates: List[Dict] = []
         for token in tokens:
             token_symbol = str(token.get("symbol", "")).upper()
             alpha_id = str(token.get("alphaId", "")).upper()
-            if token_symbol and alpha_id.startswith("ALPHA_"):
-                symbol_to_alpha_id[token_symbol] = alpha_id
-        resolved_alpha_id = symbol_to_alpha_id.get(base)
-        if not resolved_alpha_id:
-            suggestions = get_close_matches(base, sorted(symbol_to_alpha_id.keys()), n=5, cutoff=0.65)
+            if token_symbol == base and alpha_id.startswith("ALPHA_"):
+                candidates.append(token)
+
+        if not candidates:
+            all_symbols = sorted({str(t.get("symbol", "")).upper() for t in tokens if t.get("alphaId")})
+            suggestions = get_close_matches(base, all_symbols, n=5, cutoff=0.65)
             extra = f" Did you mean: {', '.join(suggestions)}?" if suggestions else ""
             raise ValueError(f"Token '{base}' not found in Binance Alpha Token List.{extra}")
 
-        # Validate against exchange-info: which quote(s) actually trade.
+        # Si hay duplicados, ordenar por (activo > offline, mayor liquidez, mayor volumen).
+        def _score(token: Dict) -> tuple:
+            offline = bool(token.get("offline", False))
+            offsell = bool(token.get("offsell", False))
+            try:
+                liq = float(token.get("liquidity") or 0.0)
+            except Exception:
+                liq = 0.0
+            try:
+                vol = float(token.get("volume24h") or 0.0)
+            except Exception:
+                vol = 0.0
+            # Tuple comparada descendente: True > False, mayor liq, mayor vol.
+            return (not offline, not offsell, liq, vol)
+
+        if len(candidates) > 1:
+            sorted_cands = sorted(candidates, key=_score, reverse=True)
+            chosen = sorted_cands[0]
+            others = [
+                f"{c.get('alphaId')}({c.get('chainName')},"
+                f"offline={c.get('offline')},liq={c.get('liquidity')})"
+                for c in sorted_cands[1:]
+            ]
+            print(
+                f"[alpha-resolve] '{base}' tiene {len(candidates)} candidatos; "
+                f"elegido {chosen.get('alphaId')} ({chosen.get('chainName')}, "
+                f"offline={chosen.get('offline')}, liq={chosen.get('liquidity')}). "
+                f"Alternativas: {others}",
+                flush=True,
+            )
+        else:
+            chosen = candidates[0]
+            if chosen.get("offline") or chosen.get("offsell"):
+                print(
+                    f"[alpha-resolve] WARN: '{base}' marcado offline/offsell; "
+                    f"alphaId={chosen.get('alphaId')} chain={chosen.get('chainName')}",
+                    flush=True,
+                )
+
+        resolved_alpha_id = str(chosen.get("alphaId", "")).upper()
         try:
             tradeable = self.alpha_symbols_for_alpha_id(resolved_alpha_id)
         except Exception:
@@ -240,7 +289,6 @@ class BinanceDownloader:
                 flush=True,
             )
             return fallback
-        # No exchange-info available, use legacy concatenation (caller may fail).
         return f"{resolved_alpha_id}{quote}"
 
     # Alpha API result codes that legitimately terminate the stream (not errors).

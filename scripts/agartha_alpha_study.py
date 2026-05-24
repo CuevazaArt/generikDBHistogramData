@@ -138,16 +138,45 @@ def main() -> int:
         _dl = BinanceDownloader()
         try:
             tokens = _dl.get_alpha_token_list()
-            match = next((t for t in tokens if str(t.get("symbol", "")).upper() == symbol_human), None)
-            if not match:
+            matches = [t for t in tokens if str(t.get("symbol", "")).upper() == symbol_human]
+            if not matches:
                 raise SystemExit(f"Token '{symbol_human}' no encontrado en Alpha token list.")
+            # Rutina: si hay duplicados, preferir activo + mayor liquidez + mayor volumen.
+            def _score(t: dict) -> tuple:
+                try:
+                    liq = float(t.get("liquidity") or 0.0)
+                except Exception:
+                    liq = 0.0
+                try:
+                    vol = float(t.get("volume24h") or 0.0)
+                except Exception:
+                    vol = 0.0
+                return (not bool(t.get("offline", False)), not bool(t.get("offsell", False)), liq, vol)
+            matches = sorted(matches, key=_score, reverse=True)
+            if len(matches) > 1:
+                alts = [f"{m.get('alphaId')}({m.get('chainName')},offline={m.get('offline')})" for m in matches[1:]]
+                print(f"[alpha-study] '{symbol_human}' tiene {len(matches)} candidatos; uso {matches[0].get('alphaId')}; alternativas: {alts}")
+            match = matches[0]
             alpha_id = str(match["alphaId"]).upper()
             tradeable = _dl.alpha_symbols_for_alpha_id(alpha_id)
             if not tradeable:
                 raise SystemExit(f"AlphaId {alpha_id} sin pares tradeables en exchange-info.")
-            # Preferir USDT si existe, si no el primero disponible.
             preferred = f"{alpha_id}USDT"
-            chosen = preferred if preferred in tradeable else tradeable[0]
+            ordered = [preferred] + [t for t in tradeable if t != preferred] if preferred in tradeable else list(tradeable)
+            chosen = None
+            for cand in ordered:
+                try:
+                    sample = list(_dl.download_klines_alpha_api(cand, args.interval, limit=5))
+                except Exception as exc:
+                    print(f"[alpha-study] probe {cand}: error {exc}")
+                    continue
+                if sample:
+                    chosen = cand
+                    break
+                else:
+                    print(f"[alpha-study] probe {cand}: 0 velas; siguiente.")
+            if chosen is None:
+                raise SystemExit(f"Ningun par tradeable de {alpha_id} devolvio velas: {tradeable}")
             chosen_quote = chosen[len(alpha_id):]
             pair_symbol = f"{symbol_human}{chosen_quote}"
             print(f"[alpha-study] {symbol_human} -> {chosen} (par humano: {pair_symbol})")
