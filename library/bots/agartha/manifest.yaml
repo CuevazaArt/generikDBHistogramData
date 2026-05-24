@@ -1,0 +1,23 @@
+schema_version: 1
+name: agartha
+kind: bot
+version: 0.1.0
+author: ""
+description: "Bot de trading para el mercado Binance Alpha (tokens semilla, alto riesgo, memecoins). En diseño desde cero."
+entry_point: null
+registry_aliases: []
+tags: ["alpha", "binance-alpha", "high-risk", "memecoin", "wip", "design"]
+reference_only: true
+created_at: "2026-05-24T00:00:00Z"
+updated_at: "2026-05-24T00:00:00Z"
+default_params: {}
+search_space: {}
+data_requirements:
+  symbols: ["ALPHA_*"]
+  intervals: ["1m", "3m", "5m", "15m", "1h"]
+  required_columns: ["open", "high", "low", "close", "volume"]
+  derived_columns: []
+data_contributions:
+  derived_dataset: null
+notes_file: "notes.md"
+preset_dir: "presets"

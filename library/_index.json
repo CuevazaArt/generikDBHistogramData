@@ -1,7 +1,28 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-05-24T07:00:45.586384+00:00",
+  "generated_at": "2026-05-24T15:44:56.993708+00:00",
   "entries": [
+    {
+      "name": "agartha",
+      "kind": "bot",
+      "version": "0.1.0",
+      "dir": "library/bots/agartha",
+      "tags": [
+        "alpha",
+        "binance-alpha",
+        "high-risk",
+        "memecoin",
+        "wip",
+        "design"
+      ],
+      "description": "Bot de trading para el mercado Binance Alpha (tokens semilla, alto riesgo, memecoins). En diseño desde cero.",
+      "entry_point": null,
+      "registry_aliases": [],
+      "reference_only": true,
+      "notes_file": "notes.md",
+      "preset_dir": "presets",
+      "presets": []
+    },
     {
       "name": "anti_louise",
       "kind": "bot",
@@ -283,10 +304,10 @@
     }
   ],
   "counts": {
-    "total": 14,
-    "bots": 14,
+    "total": 15,
+    "bots": 15,
     "indicators": 0,
     "tools": 0,
-    "reference_only": 3
+    "reference_only": 4
   }
 }
