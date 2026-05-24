@@ -23,8 +23,9 @@ objetivo sobre el precio promedio de entrada.
 
 - Sensible a `target_profit_pct` bajos (<0.5): muchísimas operaciones
   pequeñas, fees comen el retorno.
-- Funciona bien como bloque base de la familia `louise_lucky` (bot
-  independiente con mecánica Lucky Strike; ver `library/bots/louise_lucky/`).
+- Funciona como bot **generalista** de DCA + TP. Para captura de **mínimos
+  locales** (evento específico) ver el bot **especialista independiente**
+  [`library/bots/louise_lucky/`](../louise_lucky/) — no es variante de Louise.
 
 ---
 

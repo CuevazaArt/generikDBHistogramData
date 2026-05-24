@@ -1,260 +1,189 @@
-# louise_lucky — Lucky Strike (bot independiente)
+# louise_lucky — Lucky Strike (bot especialista, independiente)
 
-Bot **long-only spot** de acumulación en bajada con una capa adicional:
-**Lucky Strike** — compras oportunistas cuando el precio toca un extremo
-inferior local, **sin alterar** el ritmo de la DCA principal.
+**Lucky** es un bot **discreto e independiente** de la familia Louise/Dorothy.
+No es una variante ni un accesorio: tiene **propia lógica**, **propia razón
+de inversión** y actúa solo ante una **situación concreta y eventual**.
 
-Implementación: `LouiseLuckyStrategy` (`backtest.strategies`). Registry:
-`louise_lucky`.
-
----
-
-## Qué es Lucky
-
-**Lucky Strike** no es un flag opcional sobre Louise: es la **mecánica
-distintiva** de este bot. Detecta momentos en que el precio está en (o por
-debajo de) un **mínimo local reciente** y ejecuta una compra extra de
-`quote_order_qty_usdt`, aunque la DCA por `margin_drop_factor` no se haya
-disparado todavía.
-
-Objetivo: mejorar el **costo promedio** acumulando en puntos de máxima
-presión vendedora, sin esperar el umbral rítmico de la DCA.
+Registry: `louise_lucky` · Clase: `LouiseLuckyStrategy` (nombre histórico
+del adapter; la tesis de producto es autónoma).
 
 ---
 
-## Filosofía de inversión
+## Identidad
+
+| Atributo | Lucky |
+|---|---|
+| Tipo | Bot **especialista**, evento-driven |
+| Objetivo | **Una sola cosa:** comprar cuando el precio toca un **mínimo local** |
+| Alcance | Oportunidad **táctica** y **acotada**; no acumulación general |
+| Relación con otros bots | **Ninguna dependencia operativa.** Puede coexistir en cartera con Louise o Dorothy, pero no los extiende ni los requiere |
+
+---
+
+## La situación concreta que ataja
+
+Lucky existe para un escenario **específico y eventual**:
+
+> El precio, dentro de una ventana reciente, **toca o perfora el suelo local**
+> (mínimo relativo / extremo inferior HA) — señal de **capitulación local**
+> a corto plazo.
+
+En ese instante y **solo entonces**, ejecuta un strike: compra fija de
+`quote_order_qty_usdt` USDT.
+
+**Fuera de ese escenario, Lucky no opina.** No programa DCA, no define ritmo
+de acumulación, no gestiona grilla. Si el mercado no presenta mínimos locales
+nuevos, el bot **permanece inactivo** (hold).
+
+---
+
+## Razón de inversión
 
 ### Tesis
 
-En un activo **pre-elegido para holdear**, los mejores momentos para acumular
-no son solo “cada X % de caída”, sino también los **puntos de pánico
-intradía** — mínimos locales donde el precio toca un suelo relativo antes
-de que la DCA rítmica se dispare.
+En activos **pre-elegidos para tenencia larga**, existen ventanas breves donde
+el precio **sobre-reacciona a la baja** dentro de un tramo reciente. Esos
+puntos suelen ofrecer **mejor precio de entrada** que compras mecánicas
+espaciadas en el tiempo.
 
-Lucky apuesta a que **comprar en esos suelos mejora el avg_entry** sin
-esperar el umbral de `margin_drop_factor`.
+Lucky **no predice** el fondo del ciclo ni el timing macro. Apuesta a una
+premisa acotada:
 
-### Metáfora operativa
+- un **mínimo local** es un evento reconocible;
+- comprar en ese evento mejora el **costo marginal** de la posición;
+- la convicción de largo plazo (HODL + Earn) hace tolerable holdear si el
+  strike no marca el mínimo absoluto.
 
-| Capa | Rol | Analogía |
-|---|---|---|
-| **Louise (base)** | DCA rítmica + salida opcional | Riego programado cada X % de sequía |
-| **Lucky** | Strike en mínimos | Abrir la compuerta cuando el río toca su cauce más bajo del tramo |
+### Qué NO es
 
-### Dónde encaja
+| Lucky **no es** | Por qué |
+|---|---|
+| Bot DCA general | No compra “cada X %”; espera el **evento** mínimo local |
+| Louise con extra | Louise rige **ritmo**; Lucky atiende **evento** |
+| Dorothy / grilla | Sin rungs, sin TP parcial, sin VC |
+| Market timer macro | No usa tendencia ni gates para decidir |
+| Estrategia always-on | Sin mínimos locales → **sin operación** |
+
+### Dónde encaja en una cartera
 
 ```
-Convicción macro (HODL 3–5 años)
+Convicción macro (activo pre-elegido, HODL 3–5 años)
         ↓
-Acumulación sistemática (Louise DCA)
+[Opcional] Acumulación mecánica (Louise / Dorothy)  ← bots distintos
         ↓
-Refinamiento táctico (Lucky en mínimos)
+Lucky Strike (especialista: capitulación local)       ← este bot
         ↓
-Bag → Earn mientras esperas remonte
+Bag → Earn + espera remonte
 ```
 
-**Encaja** cuando: activo pre-seleccionado, tesis de acumular qty, mercados
-con valles intradía, marco HODL+Earn (ver
-[`library/bots/louise/notes.md`](../louise/notes.md) instrumento HODL+Earn).
-
-**No encaja** cuando: buscas mínimas operaciones (usa `louise` puro), tendencia
-bajista estructural sin convicción de remonte (Lucky acelera promediar abajo),
-o scalping con TP frecuente (Lucky es acumulación, no rotación).
-
-### Relación HODL+Earn
-
-| Modo base | Lucky aporta |
-|---|---|
-| Con TP | Mejor entrada antes del rebote que dispara venta |
-| Sin TP (`target_profit_pct=0`) | Más qty en mínimos → más bag + Earn al remontar |
-
-Preset alineado: [`presets/hodl_earn_accumulate.yaml`](presets/hodl_earn_accumulate.yaml).
+Lucky encaja como **satélite especializado**: capital y slots dedicados a
+capturar **eventos**, no a sustituir la acumulación principal.
 
 ---
 
-## Lógica por vela (`on_bar`)
+## Lógica operativa (núcleo Lucky)
 
-Orden de evaluación:
+**Condición de strike** (backtest):
 
-1. **Louise base** (TP, DCA inicial, DCA por caída) — si devuelve buy/sell,
-   se ejecuta y **no** se evalúa Lucky en esa vela.
-2. Si la base devuelve **hold** y hay cash ≥ notional:
-   - Calcular `lucky_floor`:
-     - Preferencia: `ha_low` de la **vela anterior** (Heikin-Ashi).
-     - Fallback: mínimo de `price_source` en las últimas `lucky_window` velas.
-   - Si `precio <= lucky_floor` → **buy** (`louise_lucky_strike_low`).
+1. Hay cash ≥ `quote_order_qty_usdt`.
+2. `precio <= lucky_floor`, donde `lucky_floor` es:
+   - `ha_low` de la vela anterior (preferente), o
+   - mínimo de `price_source` en las últimas **`lucky_window`** velas.
 
-```645:668:backtest/strategies.py
-    def on_bar(self, ctx: StrategyContext) -> Signal:
-        base = super().on_bar(ctx)
-        if base.action != "hold":
-            return base
-        ...
-        if price <= lucky_floor:
-            return Signal(action="buy", ..., reason="louise_lucky_strike_low", ...)
-```
+**Acción:** BUY fijo (`louise_lucky_strike_low`).
 
-### Regla crítica: anclaje DCA intacto
+**Regla de diseño:** el fill lucky **no actualiza** anclajes de ritmo DCA
+(`last_purchase_price`). El strike es **aislado** del estado de otros bots
+o capas.
 
-Las compras Lucky **no actualizan** `last_purchase_price`:
+### Nota de implementación (adapter actual)
 
-```671:674:backtest/strategies.py
-    def on_fill(self, fill, signal: Signal, ctx: StrategyContext) -> None:
-        if signal.reason == "louise_lucky_strike_low":
-            return
-        super().on_fill(fill, signal, ctx)
-```
-
-La DCA principal sigue midiendo caídas desde el **último fill “natural”**
-(inicial o `louise_dca_drop`), no desde un lucky fill. Así un strike en
-un mínimo extremo **no adelanta** el siguiente trigger de DCA.
+El código en `backtest.strategies` evalúa primero una capa Louise heredada
+(TP, DCA) y solo en **hold** ejecuta el strike Lucky. Eso es **deuda técnica
+de empaquetado**, no la tesis de producto. La identidad canónica de Lucky es
+**solo el strike en mínimo local**; la refactorización futura apunta a un
+adapter puro evento-only.
 
 ---
 
-## Parámetros: matriz de independencia
+## Parámetros
 
-```
-┌─────────────────────────────────────────┐
-│  LUCKY STRIKE (timing micro)            │
-│  Parámetro propio: lucky_window         │
-│  Compra en mínimo local; no mueve ancla │
-└─────────────────┬───────────────────────┘
-                  │ solo si base = hold
-┌─────────────────▼───────────────────────┐
-│  LOUISE BASE (ritmo + salida)           │
-│  Params: mdf, target_profit_pct, quote  │
-└─────────────────────────────────────────┘
-```
+### Propios de Lucky (los que definen al especialista)
 
-### Parámetro **propio** de Lucky
-
-| Parámetro | Default | Rango | Qué controla |
+| Parámetro | Default | Rango | Rol |
 |---|---:|---|---|
-| **`lucky_window`** | 24 | 8 – 72 | Sensibilidad del mínimo local (velas hacia atrás). |
+| **`lucky_window`** | 24 | 8 – 72 | **Único knob de la especialización:** qué tan “local” es el mínimo. |
+| `quote_order_qty_usdt` | 8.0 | — | Tamaño del strike (notional por evento). |
 
-Calibración por intervalo:
+Calibración de **`lucky_window`**:
 
-| Intervalo | `lucky_window=24` |
+| Valor | Comportamiento |
 |---|---|
-| **1h** | ~1 día de contexto |
-| **1m** | ~24 minutos |
-| **1s** + `loop_seconds=29` | Recalibrar: la ventana es en **velas**, no wall-clock |
+| **8–12** | Mínimos muy frescos → más eventos, más agresivo |
+| **24** (baseline 1h) | ~1 día de contexto |
+| **48–72** | Solo capitulaciones más profinas / estiradas |
 
-Efectos al tunear **solo** `lucky_window`:
+Detección live: HA low del **daily cerrado** (macro). Backtest: intrabar +
+ventana — calibrar por intervalo y `loop_seconds`.
 
-- **Bajo (8–12):** mínimos más frescos → más strikes, más agresivo.
-- **Alto (48–72):** mínimos más estirados → menos strikes, capitulaciones profundas.
+### Parámetros presentes por herencia de adapter (no son la tesis Lucky)
 
-Detección preferente (no parametrizada en backtest): `ha_low` vela anterior.
-En live: HA low del **daily cerrado** (micro vs macro).
-
-### Parámetros **heredados** (capa Louise, ortogonales a Lucky)
-
-| Parámetro | Default | Rol | vs Lucky |
-|---|---:|---|---|
-| `target_profit_pct` | 1.5 | TP 100 % sobre avg | **Ortogonal.** `0` = acumular; Lucky sigue en mínimos. |
-| `margin_drop_factor` | 0.004 | Umbral DCA rítmica | **Ortogonal.** Lucky solo actúa en **hold** de la base. |
-| `quote_order_qty_usdt` | 8.0 | Notional por compra | **Compartido** (lucky y DCA mismo lote). |
-
-Interacción **`margin_drop_factor` × Lucky**:
-
-| mdf | Efecto |
+| Parámetro | Nota |
 |---|---|
-| Bajo (0.004) | DCA se dispara antes → Lucky compite menos con la base |
-| Alto (0.04) | DCA más lenta → más ventanas en hold → **más strikes Lucky** |
+| `target_profit_pct` | Pertenece a capa Louise empaquetada; en tesis pura Lucky **no vende**. Usar `0` en modo acumulación. |
+| `margin_drop_factor` | Pertenece a DCA rítmica Louise; **no define** el strike. Ignorar al estudiar Lucky puro. |
 
-Para estudiar **solo Lucky**, fijar mdf/TP/quote y barrer `lucky_window`.
+Para aislar Lucky en backtests: fijar `target_profit_pct=0`, `margin_drop_factor`
+alto (p. ej. 0.04) para minimizar interferencia DCA, y barrer **`lucky_window`**.
 
-### Motor (no en manifest; calibran Lucky)
+Presets:
 
-| Flag | Efecto |
-|---|---|
-| `loop_seconds` | Frecuencia de evaluación del strike |
-| `interval` | Escala temporal de `lucky_window` y `ha_low` |
-| `initial_cash` | Cash compartido entre DCA y lucky fills |
-
----
-
-## Parámetros editables (resumen CLI)
-
-| Parámetro | Default | Rango Optuna | Función |
-|---|---:|---|---|
-| `lucky_window` | 24 | 8 – 72 | Velas para el mínimo móvil (fallback si no hay `ha_low`) |
-| `target_profit_pct` | 1.5 | 0.2 – 5.0 | TP sobre avg (0 = sin venta) |
-| `margin_drop_factor` | 0.004 | 0.001 – 0.03 | Umbral DCA principal |
-| `quote_order_qty_usdt` | 8.0 | — | Notional por compra (normal o lucky) |
-
-Presets: [`default.yaml`](presets/default.yaml),
-[`hodl_earn_accumulate.yaml`](presets/hodl_earn_accumulate.yaml).
-
----
-
-## Tres tipos de compra
-
-| Tipo | Reason | Actualiza `last_purchase_price` | Condición |
-|---|---|---|---|
-| Inicial | `louise_initial_buy` | Sí | Sin posición / sin anclaje |
-| DCA | `louise_dca_drop` | Sí | Precio < last × (1 − mdf) |
-| **Lucky** | `louise_lucky_strike_low` | **No** | Precio ≤ mínimo local / HA low |
-
-Ventas: igual que Louise — TP 100 % si `target_profit_pct > 0`.
+- [`default.yaml`](presets/default.yaml) — adapter empaquetado (legacy).
+- [`hodl_earn_accumulate.yaml`](presets/hodl_earn_accumulate.yaml) — acumulación
+  sin TP; strike activo en mínimos.
 
 ---
 
 ## Live vs backtest
 
-| Aspecto | Backtest | Live (`imported_bots/.../louise.py`) |
+| Aspecto | Backtest | Live |
 |---|---|---|
-| Detección lucky | `ha_low` vela previa o min(`lucky_window`) | **HA low del último daily cerrado** (1d) |
-| Marcado | `reason` en signal | `is_lucky_fill` en metadata WS |
-| Efecto anclaje | Igual: lucky no mueve `last_purchase_price` | Igual |
-
-En live el criterio es **más macro** (diario HA); en backtest es **intrabar**
-con ventana configurable. Calibrar `lucky_window` por intervalo.
+| Evento | `precio <= lucky_floor` intrabar | `precio <= ha_low` daily cerrado |
+| Marcado | `louise_lucky_strike_low` | `is_lucky_fill` |
+| Anclaje | Strike no mueve `last_purchase_price` | Igual |
 
 ---
 
-## Intervalos y calibración
+## Gates y capital
 
-Manifest declara **1m, 1h**. Baseline documentado:
-
-- `lucky_window=24` en **1h** ≈ 1 día de contexto para el mínimo móvil.
-- En **1s** con `loop_seconds=29`, re-calibrar ventana (más velas = más
-  contexto temporal).
-
-Si no hay mínimos locales nuevos, el bot se comporta **idéntico a Louise**.
+- Sin gates activos (solo anota `pec_trend`).
+- Sin accesorios VC/VI / max_rungs.
+- Baja exigencia: ~8 USDT por **evento**; capital idle entre strikes.
 
 ---
 
-## Gates y accesorios
+## Simétrico (familia de producto, no dependencia)
 
-- **Gates Pecunator**: anota `pec_trend` en `on_start`; **no filtra** compras.
-- **Sin** VolumenCompuesto / VolumenIncremental / max_rungs.
-- Misma baja exigencia de capital que Louise (~8 USDT/tick).
-
----
-
-## Familia simétrica
-
-| Bot | Lucky en | Extremo |
+| Bot | Evento | Extremo |
 |---|---|---|
-| `louise_lucky` | Mínimos | Long DCA |
-| `anti_louise_lucky` | Máximos | Inverse DCA (spot) |
+| **`louise_lucky`** | Mínimo local | Long strike |
+| `anti_louise_lucky` | Máximo local | Inverse strike |
 
 ---
 
-## Cuándo usar Lucky vs Louise puro
+## Cuándo desplegar Lucky
 
-| Usar **louise_lucky** | Usar **louise** |
+| Sí | No |
 |---|---|
-| Quieres capturar **capitulaciones locales** antes del umbral DCA | Basta DCA rítmica por caída % |
-| El activo hace **picos y valles** intradía | Prefieres menos compras, lógica mínima |
-| Aceptas más fills en mínimos (mejor avg potencial) | Quieres menos operaciones |
+| Activo pre-elegido, convicción largo plazo | Necesitas acumulación mecánica continua → **Louise** |
+| Quieres **especialista** en capitulaciones locales | Quieres grilla / rotación parcial → **Dorothy** |
+| Aceptas **inactividad** entre eventos | Necesitas bot always-on |
 
 ---
 
 ## Pendientes
 
-- Corridas encadenadas 2024–2026 comparables al instrumento HODL+Earn de Louise.
-- Alinear criterio live (1d HA) vs backtest (intrabar) en un preset por intervalo.
-- Registry de runs (`runs_registry.md`) tras primeros estudios cross-symbol.
+- Adapter **puro** solo-strike (sin capa Louise en `on_bar`).
+- Corridas 2024–2026 aislando `lucky_window` vs baseline sin strikes.
+- Preset live-aligned (detección 1d HA) vs intrabar backtest.
+- `runs_registry.md` del especialista.
