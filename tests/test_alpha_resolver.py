@@ -92,3 +92,18 @@ def test_alpha_fatal_codes_include_invalid_symbol():
 def test_alpha_end_of_stream_codes_include_no_records():
     """-1000 debe estar en sentinels para no romper la paginacion."""
     assert "-1000" in BinanceDownloader.ALPHA_END_OF_STREAM_CODES
+
+
+def test_alpha_symbols_for_alpha_id_returns_empty_for_catalog_only_tokens():
+    """Caso LRCXon: token registrado en token list pero sin par tradeable.
+
+    El metodo `alpha_symbols_for_alpha_id` debe devolver lista vacia cuando
+    el alphaId no aparece en exchange-info. El pipeline orquestador detecta
+    esto y falla con un mensaje claro (sin intentar descargar).
+    """
+    dl = BinanceDownloader()
+    # Simulamos exchange-info SIN el alphaId pedido
+    fake_info = {"symbols": [{"symbol": "ALPHA_100USDT"}, {"symbol": "ALPHA_200USDC"}]}
+    with patch.object(dl, "get_alpha_exchange_info", return_value=fake_info):
+        out = dl.alpha_symbols_for_alpha_id("ALPHA_899")
+        assert out == []

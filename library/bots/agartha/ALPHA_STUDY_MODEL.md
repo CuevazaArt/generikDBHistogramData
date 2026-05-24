@@ -132,6 +132,8 @@ son **adaptaciones de produccion** que ya estan en el codigo.
 | **API code `-1121 Invalid symbol`** para tokens muy nuevos | PHAROS antes del fix | Añadido a `ALPHA_FATAL_CODES`; ya no retry, raise inmediato visible |
 | **End-of-stream `-1000 No records found`** | BILL al final del histórico | Tratado como termino normal de paginacion |
 | **Mismo human symbol con multiples alphaIds** (cross-chain duplicates) | PLAY: `ALPHA_822` (Base, activo, liq 831k) y `ALPHA_300` (BSC, offline+offsell) | Scoring `(not offline, not offsell, liquidity, volume24h)`; warning con alternativas descartadas |
+| **Par USDT registrado pero sin velas** (exchange-info incluye el par, klines devuelve 0) | PLAY: `ALPHA_822USDT` listado pero vacio, solo `ALPHA_822USDC` tiene datos | **Sample probe** con `limit=5` por candidato; descartar si vacio y probar el siguiente quote |
+| **Token registrado en token list pero sin par tradeable** (catalogo inactivo) | LRCXon (`ALPHA_899`, BSC, `liquidity=None`, `volume24h=0`, `tradeable=[]`) | Detectado con `alpha_symbols_for_alpha_id`; pipeline falla con mensaje claro `"AlphaId X sin pares tradeables en exchange-info"`. **No descargar.** |
 
 Cuando aparezca una nueva regla:
 1. Logguearla en este archivo (tabla anterior).
@@ -168,5 +170,10 @@ Cobertura de tests: `tests/test_alpha_resolver.py` (regresion de cada regla).
 | **BILL** | 2026-05-24 | **+482.93 %** | 28.5 % | Pump claro 4-16 mayo; sweet spot estrecho |
 | **PHAROS** | 2026-05-24 | **-1.40 %** | 40.0 % | Sin pump; todos los seteos negativos. Mejor: defensivo |
 | **PLAY** | 2026-05-24 | **+242.34 %** | 5.0 % | Pump abril; trailing **ultra-corto** (5%) + activation 200% gana; quote USDC (USDT vacio) |
+| **B2** | 2026-05-24 | **-2.22 %** | 1.0 % | BSquared Network (BSC); 20300 velas; sin pump; mejor caso es perder casi nada |
+| **NEX** | 2026-05-24 | **+16.98 %** | 5.0 % | Nexus (BSC); solo 404 velas (4 dias); pump moderado |
+| **LRCXon** | 2026-05-24 | **N/A** | - | **NO TRADEABLE**: registrado en token list pero `tradeable=[]`. Pipeline falla limpio. |
+| **CHECK** | 2026-05-24 | **-0.47 %** | 25.0 % | Checkmate (Base, USDC); 5036 velas; sin pump |
+| **BTW** | 2026-05-24 | **+163.45 %** | 20.0 % | Bitway (BSC); 8012 velas (84 dias); pump grande capturado |
 
 (añadir filas conforme se evaluen nuevos simbolos)
