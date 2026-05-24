@@ -84,12 +84,37 @@ def main() -> int:
     dl = BinanceDownloader()
     symbol_human = args.symbol.upper()
     base = symbol_human
+    requested_quote = "USDT"
     for q in ("USDT", "USDC"):
         if base.endswith(q):
+            requested_quote = q
             base = base[: -len(q)]
             break
     meta = _resolve_alpha_metadata(dl, base)
-    alpha_symbol = f"{str(meta['alphaId']).upper()}USDT"
+    alpha_id = str(meta["alphaId"]).upper()
+    # Cross-check exchange-info to pick the correct quote (USDT vs USDC).
+    try:
+        tradeable = dl.alpha_symbols_for_alpha_id(alpha_id)
+    except Exception as exc:
+        print(f"[alpha-prep] WARN: could not fetch exchange-info ({exc}); using requested quote.")
+        tradeable = []
+    if tradeable:
+        preferred = f"{alpha_id}{requested_quote}"
+        if preferred in tradeable:
+            alpha_symbol = preferred
+        else:
+            alpha_symbol = tradeable[0]
+            print(
+                f"[alpha-prep] '{requested_quote}' no es tradeable para {base}; "
+                f"disponibles={tradeable}; uso '{alpha_symbol}'."
+            )
+            # Also rewrite the human symbol to reflect the actual quote.
+            new_quote = alpha_symbol[len(alpha_id):]
+            if new_quote and new_quote != requested_quote:
+                symbol_human = f"{base}{new_quote}"
+                print(f"[alpha-prep] human symbol normalizado a '{symbol_human}'.")
+    else:
+        alpha_symbol = f"{alpha_id}{requested_quote}"
     listing_ms = int(meta.get("listingTime") or 0)
     start_ts = int(args.start) if args.start else (listing_ms or 0)
     end_ts = int(args.end) if args.end else int(datetime.now(tz=timezone.utc).timestamp() * 1000)

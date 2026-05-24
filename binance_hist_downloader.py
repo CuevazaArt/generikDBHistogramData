@@ -151,8 +151,53 @@ class BinanceDownloader:
             raise RuntimeError("Alpha token list payload does not contain a valid data list")
         return data
 
+    def get_alpha_exchange_info(self) -> Dict:
+        """Return Alpha exchange-info (symbols + filters)."""
+        url = self.BASE_ALPHA + self.ALPHA_EXCHANGE_INFO_PATH
+        try:
+            r = self.s.get(url, timeout=30)
+        except requests.RequestException as exc:
+            raise RuntimeError(f"Alpha exchange-info request failed: {exc}") from exc
+        if r.status_code != 200:
+            body = r.text[:300] if r.text else ""
+            raise RuntimeError(f"Alpha exchange-info HTTP {r.status_code}: {body}")
+        try:
+            payload = r.json()
+        except Exception as exc:
+            raise RuntimeError("Alpha exchange-info response is not valid JSON") from exc
+        if str(payload.get("code")) != "000000":
+            raise RuntimeError(
+                f"Alpha exchange-info API error: code={payload.get('code')} message={payload.get('message')}"
+            )
+        return payload.get("data") or {}
+
+    def alpha_symbols_for_alpha_id(self, alpha_id: str) -> List[str]:
+        """Return tradeable pair symbols (e.g. ALPHA_964USDC) for a given alphaId.
+
+        Some Alpha tokens quote only against USDC, others against USDT. The
+        token list does not state this; only exchange-info does. We list all
+        symbols that begin with `<alphaId>` so the caller picks the right one.
+        """
+        target = str(alpha_id).upper()
+        info = self.get_alpha_exchange_info()
+        symbols = []
+        for s in info.get("symbols", []):
+            sym = str(s.get("symbol", "")).upper()
+            if sym.startswith(target):
+                symbols.append(sym)
+        return symbols
+
     def resolve_alpha_symbol(self, symbol: str) -> str:
-        """Map human symbol (e.g. VELOUSDT) to Alpha symbol (e.g. ALPHA_229USDT)."""
+        """Map human symbol (e.g. PHAROSUSDT) to a tradeable Alpha pair.
+
+        Process:
+          1. Strip the requested quote suffix (USDT/USDC/...).
+          2. Look up the alphaId in the token list.
+          3. Cross-check exchange-info for actual tradeable pairs for that
+             alphaId; if the requested quote is not tradeable, fall back to
+             the first tradeable pair and emit a warning (typical: requested
+             USDT but token only trades USDC, or vice versa).
+        """
         requested = symbol.strip().upper()
         if requested.startswith("ALPHA_"):
             return requested
@@ -178,6 +223,24 @@ class BinanceDownloader:
             suggestions = get_close_matches(base, sorted(symbol_to_alpha_id.keys()), n=5, cutoff=0.65)
             extra = f" Did you mean: {', '.join(suggestions)}?" if suggestions else ""
             raise ValueError(f"Token '{base}' not found in Binance Alpha Token List.{extra}")
+
+        # Validate against exchange-info: which quote(s) actually trade.
+        try:
+            tradeable = self.alpha_symbols_for_alpha_id(resolved_alpha_id)
+        except Exception:
+            tradeable = []
+        if tradeable:
+            preferred = f"{resolved_alpha_id}{quote}"
+            if preferred in tradeable:
+                return preferred
+            fallback = tradeable[0]
+            print(
+                f"[alpha-resolve] {base}: requested quote '{quote}' not tradeable on Alpha; "
+                f"available pairs={tradeable}; falling back to '{fallback}'.",
+                flush=True,
+            )
+            return fallback
+        # No exchange-info available, use legacy concatenation (caller may fail).
         return f"{resolved_alpha_id}{quote}"
 
     # Alpha API result codes that legitimately terminate the stream (not errors).
@@ -190,7 +253,9 @@ class BinanceDownloader:
     )
     # Codes documented as fatal (do not retry). All other non-000000 codes are
     # treated as transient and retried with backoff.
-    ALPHA_FATAL_CODES = frozenset({"-2008", "-2011"})  # invalid symbol, unknown order, etc.
+    # -1121 = Invalid symbol (e.g. wrong quote asset for an Alpha pair).
+    ALPHA_FATAL_CODES = frozenset({"-1121", "-2008", "-2011"})
+    ALPHA_EXCHANGE_INFO_PATH = "/bapi/defi/v1/public/alpha-trade/get-exchange-info"
 
     def download_klines_alpha_api(
         self,
