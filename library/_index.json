@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-05-24T05:05:38.650733+00:00",
+  "generated_at": "2026-05-24T06:56:47.597973+00:00",
   "entries": [
     {
       "name": "anti_louise",
@@ -183,7 +183,8 @@
       "notes_file": "notes.md",
       "preset_dir": "presets",
       "presets": [
-        "default"
+        "default",
+        "hodl_earn_accumulate"
       ]
     },
     {

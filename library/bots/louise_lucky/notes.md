@@ -22,6 +22,56 @@ presión vendedora, sin esperar el umbral rítmico de la DCA.
 
 ---
 
+## Filosofía de inversión
+
+### Tesis
+
+En un activo **pre-elegido para holdear**, los mejores momentos para acumular
+no son solo “cada X % de caída”, sino también los **puntos de pánico
+intradía** — mínimos locales donde el precio toca un suelo relativo antes
+de que la DCA rítmica se dispare.
+
+Lucky apuesta a que **comprar en esos suelos mejora el avg_entry** sin
+esperar el umbral de `margin_drop_factor`.
+
+### Metáfora operativa
+
+| Capa | Rol | Analogía |
+|---|---|---|
+| **Louise (base)** | DCA rítmica + salida opcional | Riego programado cada X % de sequía |
+| **Lucky** | Strike en mínimos | Abrir la compuerta cuando el río toca su cauce más bajo del tramo |
+
+### Dónde encaja
+
+```
+Convicción macro (HODL 3–5 años)
+        ↓
+Acumulación sistemática (Louise DCA)
+        ↓
+Refinamiento táctico (Lucky en mínimos)
+        ↓
+Bag → Earn mientras esperas remonte
+```
+
+**Encaja** cuando: activo pre-seleccionado, tesis de acumular qty, mercados
+con valles intradía, marco HODL+Earn (ver
+[`library/bots/louise/notes.md`](../louise/notes.md) instrumento HODL+Earn).
+
+**No encaja** cuando: buscas mínimas operaciones (usa `louise` puro), tendencia
+bajista estructural sin convicción de remonte (Lucky acelera promediar abajo),
+o scalping con TP frecuente (Lucky es acumulación, no rotación).
+
+### Relación HODL+Earn
+
+| Modo base | Lucky aporta |
+|---|---|
+| Con TP | Mejor entrada antes del rebote que dispara venta |
+| Sin TP (`target_profit_pct=0`) | Más qty en mínimos → más bag + Earn al remontar |
+
+Preset alineado: [`presets/hodl_earn_accumulate.yaml`](presets/hodl_earn_accumulate.yaml).
+
+---
+
 ## Lógica por vela (`on_bar`)
 
 Orden de evaluación:
@@ -61,16 +111,81 @@ un mínimo extremo **no adelanta** el siguiente trigger de DCA.
 
 ---
 
-## Parámetros editables
+## Parámetros: matriz de independencia
+
+```
+┌─────────────────────────────────────────┐
+│  LUCKY STRIKE (timing micro)            │
+│  Parámetro propio: lucky_window         │
+│  Compra en mínimo local; no mueve ancla │
+└─────────────────┬───────────────────────┘
+                  │ solo si base = hold
+┌─────────────────▼───────────────────────┐
+│  LOUISE BASE (ritmo + salida)           │
+│  Params: mdf, target_profit_pct, quote  │
+└─────────────────────────────────────────┘
+```
+
+### Parámetro **propio** de Lucky
+
+| Parámetro | Default | Rango | Qué controla |
+|---|---:|---|---|
+| **`lucky_window`** | 24 | 8 – 72 | Sensibilidad del mínimo local (velas hacia atrás). |
+
+Calibración por intervalo:
+
+| Intervalo | `lucky_window=24` |
+|---|---|
+| **1h** | ~1 día de contexto |
+| **1m** | ~24 minutos |
+| **1s** + `loop_seconds=29` | Recalibrar: la ventana es en **velas**, no wall-clock |
+
+Efectos al tunear **solo** `lucky_window`:
+
+- **Bajo (8–12):** mínimos más frescos → más strikes, más agresivo.
+- **Alto (48–72):** mínimos más estirados → menos strikes, capitulaciones profundas.
+
+Detección preferente (no parametrizada en backtest): `ha_low` vela anterior.
+En live: HA low del **daily cerrado** (micro vs macro).
+
+### Parámetros **heredados** (capa Louise, ortogonales a Lucky)
+
+| Parámetro | Default | Rol | vs Lucky |
+|---|---:|---|---|
+| `target_profit_pct` | 1.5 | TP 100 % sobre avg | **Ortogonal.** `0` = acumular; Lucky sigue en mínimos. |
+| `margin_drop_factor` | 0.004 | Umbral DCA rítmica | **Ortogonal.** Lucky solo actúa en **hold** de la base. |
+| `quote_order_qty_usdt` | 8.0 | Notional por compra | **Compartido** (lucky y DCA mismo lote). |
+
+Interacción **`margin_drop_factor` × Lucky**:
+
+| mdf | Efecto |
+|---|---|
+| Bajo (0.004) | DCA se dispara antes → Lucky compite menos con la base |
+| Alto (0.04) | DCA más lenta → más ventanas en hold → **más strikes Lucky** |
+
+Para estudiar **solo Lucky**, fijar mdf/TP/quote y barrer `lucky_window`.
+
+### Motor (no en manifest; calibran Lucky)
+
+| Flag | Efecto |
+|---|---|
+| `loop_seconds` | Frecuencia de evaluación del strike |
+| `interval` | Escala temporal de `lucky_window` y `ha_low` |
+| `initial_cash` | Cash compartido entre DCA y lucky fills |
+
+---
+
+## Parámetros editables (resumen CLI)
 
 | Parámetro | Default | Rango Optuna | Función |
 |---|---:|---|---|
 | `lucky_window` | 24 | 8 – 72 | Velas para el mínimo móvil (fallback si no hay `ha_low`) |
-| `target_profit_pct` | 1.5 | 0.2 – 5.0 | TP sobre avg (0 = sin venta, como Louise) |
+| `target_profit_pct` | 1.5 | 0.2 – 5.0 | TP sobre avg (0 = sin venta) |
 | `margin_drop_factor` | 0.004 | 0.001 – 0.03 | Umbral DCA principal |
 | `quote_order_qty_usdt` | 8.0 | — | Notional por compra (normal o lucky) |
 
-Preset: [`presets/default.yaml`](presets/default.yaml).
+Presets: [`default.yaml`](presets/default.yaml),
+[`hodl_earn_accumulate.yaml`](presets/hodl_earn_accumulate.yaml).
 
 ---
 

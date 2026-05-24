@@ -1,0 +1,7 @@
+# Instrumento HODL+Earn + Lucky Strike (acumulación pura, sin TP).
+# Capa base Louise: ver library/bots/louise/presets/hodl_earn_accumulate.yaml
+# Parámetro propio Lucky: lucky_window (sensibilidad del mínimo local).
+target_profit_pct: 0
+margin_drop_factor: 0.04
+quote_order_qty_usdt: 8.0
+lucky_window: 24
