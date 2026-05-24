@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-05-24T07:00:36.342817+00:00",
+  "generated_at": "2026-05-24T07:00:45.586384+00:00",
   "entries": [
     {
       "name": "anti_louise",
@@ -171,12 +171,13 @@
       "version": "1.0.0",
       "dir": "library/bots/louise_lucky",
       "tags": [
-        "dca",
+        "specialist",
+        "event-driven",
         "long-only",
         "lucky-strike",
-        "accumulation"
+        "local-extreme"
       ],
-      "description": "Bot Lucky Strike: DCA long + compras oportunistas en mínimos locales (mecánica independiente de Louise base).",
+      "description": "Bot especialista Lucky Strike: compra discrecional en mínimo local (evento concreto). Independiente de Louise/Dorothy.",
       "entry_point": "backtest.strategies:LouiseLuckyStrategy",
       "registry_aliases": [],
       "reference_only": false,

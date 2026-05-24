@@ -3,10 +3,10 @@ name: louise_lucky
 kind: bot
 version: 1.0.0
 author: ""
-description: "Bot Lucky Strike: DCA long + compras oportunistas en mínimos locales (mecánica independiente de Louise base)."
+description: "Bot especialista Lucky Strike: compra discrecional en mínimo local (evento concreto). Independiente de Louise/Dorothy."
 entry_point: "backtest.strategies:LouiseLuckyStrategy"
 registry_aliases: []
-tags: ["dca", "long-only", "lucky-strike", "accumulation"]
+tags: ["specialist", "event-driven", "long-only", "lucky-strike", "local-extreme"]
 created_at: "2026-05-22T00:00:00Z"
 updated_at: "2026-05-24T12:00:00Z"
 default_params:
