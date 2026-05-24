@@ -215,10 +215,17 @@ class BinanceDownloader:
                 payload = r.json()
             except Exception as exc:
                 raise RuntimeError(f"Alpha klines response is not valid JSON for {alpha_symbol}") from exc
-            if str(payload.get("code")) != "000000" or not payload.get("success", False):
+            code = str(payload.get("code"))
+            message = str(payload.get("message", ""))
+            # End-of-stream sentinel: Alpha API returns -1000 / "No records found"
+            # when the requested startTime is past the last available bar. Treat
+            # as graceful termination instead of a fatal error.
+            if code != "000000" or not payload.get("success", False):
+                if "No records found" in message or code == "-1000":
+                    break
                 raise RuntimeError(
                     f"Alpha klines API error for {alpha_symbol}: "
-                    f"code={payload.get('code')} message={payload.get('message')}"
+                    f"code={code} message={message}"
                 )
             data = payload.get("data")
             if not data:

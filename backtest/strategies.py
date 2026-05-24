@@ -851,6 +851,13 @@ class AgarthaStrategy(StrategyBase):
         if price <= 0:
             return Signal(action="hold", reason="invalid_price")
 
+        # Cierre observado desde el broker: si ya teniamos entry_price registrado
+        # pero el broker quedo plano, contabilizamos el ciclo (defensa contra
+        # detecciones perdidas en on_fill cuando el motor pasa ctx pre-fill).
+        if self.entry_price > 0 and ctx.position_qty <= 0:
+            self.cycles_closed += 1
+            self._reset_position_state()
+
         # Sin posicion: comprar si nunca compramos (o si re-entry esta permitido).
         if ctx.position_qty <= 0 or self.entry_price <= 0:
             if self.cycles_closed > 0 and not self.allow_reentry:
@@ -938,12 +945,11 @@ class AgarthaStrategy(StrategyBase):
             self.trailing_active = self.activation_profit_pct == 0
             self.partial_tp_done = False
         elif side == "sell":
-            # Si la venta dejo posicion residual (partial TP) seguimos.
-            try:
-                residual = float(ctx.position_qty)
-            except Exception:
-                residual = 0.0
-            if residual <= 1e-12:
+            # El motor pasa ctx PRE-fill (ver engine.run_backtest), por lo que
+            # ctx.position_qty no refleja la qty residual post-venta. Detectamos
+            # cierre total via signal.size_pct (TP parcial vende <1.0).
+            size_pct = float(getattr(signal, "size_pct", 1.0) or 1.0)
+            if size_pct >= 0.999:
                 self.cycles_closed += 1
                 self._reset_position_state()
 
