@@ -167,5 +167,6 @@ Cobertura de tests: `tests/test_alpha_resolver.py` (regresion de cada regla).
 |---|---|---:|---:|---|
 | **BILL** | 2026-05-24 | **+482.93 %** | 28.5 % | Pump claro 4-16 mayo; sweet spot estrecho |
 | **PHAROS** | 2026-05-24 | **-1.40 %** | 40.0 % | Sin pump; todos los seteos negativos. Mejor: defensivo |
+| **PLAY** | 2026-05-24 | **+242.34 %** | 5.0 % | Pump abril; trailing **ultra-corto** (5%) + activation 200% gana; quote USDC (USDT vacio) |
 
 (añadir filas conforme se evaluen nuevos simbolos)
