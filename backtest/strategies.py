@@ -599,7 +599,7 @@ class LouiseStrategy(StrategyBase):
         price = float(ctx.candle.get("price_source", ctx.candle["close"]))
         if price <= 0:
             return Signal(action="hold", reason="invalid_price")
-        if ctx.position_qty > 0 and ctx.avg_entry > 0:
+        if self.target_profit_pct > 0 and ctx.position_qty > 0 and ctx.avg_entry > 0:
             tp_price = float(ctx.avg_entry) * (1.0 + self.target_profit_pct / 100.0)
             if price >= tp_price:
                 return Signal(action="sell", size_pct=1.0, reason="louise_take_profit", metadata={"tp_price": tp_price})
@@ -624,6 +624,13 @@ class LouiseStrategy(StrategyBase):
             fill_price = float(fill.get("price", 0.0) or 0.0)
             if fill_price > 0:
                 self.last_purchase_price = fill_price
+
+    def export_state(self) -> dict:
+        return {"last_purchase_price": float(self.last_purchase_price)}
+
+    def import_state(self, state: dict) -> None:
+        if state:
+            self.last_purchase_price = float(state.get("last_purchase_price", 0.0) or 0.0)
 
 
 class LouiseLuckyStrategy(LouiseStrategy):

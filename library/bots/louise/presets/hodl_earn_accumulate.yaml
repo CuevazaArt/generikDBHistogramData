@@ -1,0 +1,5 @@
+# Instrumento operativo: Louise HODL+Earn (acumulación pura, sin take-profit).
+# Ver library/bots/louise/notes.md sección "Instrumento HODL+Earn".
+target_profit_pct: 0
+margin_drop_factor: 0.04
+quote_order_qty_usdt: 8.0

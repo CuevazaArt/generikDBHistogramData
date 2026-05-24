@@ -3,12 +3,12 @@ name: louise_lucky
 kind: bot
 version: 1.0.0
 author: ""
-description: "Variante de Louise con entradas oportunistas en mínimos locales (lucky strikes)."
+description: "Bot Lucky Strike: DCA long + compras oportunistas en mínimos locales (mecánica independiente de Louise base)."
 entry_point: "backtest.strategies:LouiseLuckyStrategy"
 registry_aliases: []
-tags: ["dca", "long-only", "lucky-strike"]
+tags: ["dca", "long-only", "lucky-strike", "accumulation"]
 created_at: "2026-05-22T00:00:00Z"
-updated_at: "2026-05-22T00:00:00Z"
+updated_at: "2026-05-24T00:00:00Z"
 default_params:
   target_profit_pct: 1.5
   margin_drop_factor: 0.004
