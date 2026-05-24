@@ -32,6 +32,50 @@ Implementacion: `backtest.strategies.AgarthaStrategy`. Registry: `agartha`.
 
 ---
 
+## Decision tecnica: trailing 100% en el bot (no en Binance)
+
+Binance Alpha solo acepta orden **`LIMIT`** (ver `Get Exchange Info` →
+`"orderTypes": ["LIMIT"]`). No existe `STOP_LOSS`, `TRAILING_STOP_MARKET`,
+`OCO` ni `trailingDelta` server-side en este mercado.
+
+Implicacion obligatoria para Agartha live:
+
+1. **El bot mantiene `peak_price` y `trail_floor` en memoria** y debe
+   persistirlos con alta frecuencia (idealmente cada tick), porque un crash
+   del proceso pierde el peak y rompe la promesa del trailing.
+2. **La decision de venta vive en el bot**: cuando `price <= trail_floor`,
+   emite una orden `SELL LIMIT` al exchange. Binance no la dispara solo.
+3. **Filtros del exchange aplican siempre**:
+   - `PERCENT_PRICE_BY_SIDE` (ej. bid down 0.2x, ask up 5x) puede dejar la
+     LIMIT propuesta **fuera de banda** en crashes rapidos.
+   - `tickSize`, `minNotional`, `MAX_NUM_ORDERS` deben respetarse.
+4. **Reglas arbitrarias no documentadas**: Binance puede rechazar ordenes
+   por motivos que no estan en docs publicas. El bot **debe loguear cada
+   intento** y adaptar la logica por simbolo segun la respuesta real.
+5. **Modulos auxiliares** (ya implementados, sin I/O):
+   - `backtest/agartha_exit_planner.py`: calcula `trail_floor`, banda,
+     LIMIT objetivo y decide entre `TRAIL_LIMIT`, `TRAIL_BORDER` (re-cotiza
+     al borde inferior de la banda permitida), `CREST_CONFIRMED` (detector
+     de cresta como senial alternativa) y `OUT_OF_BAND` (alerta).
+   - `backtest/agartha_telemetry.py`: emisor JSONL append-only por
+     simbolo/dia con `current_price`, `entry_price`, `peak_price`,
+     `trail_floor`, `distance_to_floor_pct`, `band_lower/upper`, accion
+     planeada, fallback usado. Tambien `append_alert_log()` para eventos
+     OUT_OF_BAND y rechazos arbitrarios.
+6. **Health check obligatorio** del proceso (systemd/Docker restart);
+   monitor externo que alerte si el bot no procesa ticks >N segundos.
+7. **Reconciliacion al arrancar**: leer ultimo peak/entry de persistencia,
+   pedir `@miniTicker` actual, recalcular `plan_exit()`; si el precio
+   actual ya esta debajo del floor, vender YA en el primer tick.
+
+Diferencia con Louise/Dorothy (spot maduro): aquellos pares ofrecen `OCO`
+y `trailingDelta` nativos como red de seguridad. **Agartha no tiene esa
+red**: cualquier desvio o caida del bot es perdida pura. Por eso el
+artefacto de monitoreo es mas critico aqui que en cualquier otro bot del
+repo.
+
+---
+
 ## Logica del bot (`on_bar`)
 
 ```
