@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-05-24T16:23:12.537039+00:00",
+  "generated_at": "2026-05-24T17:21:44.971000+00:00",
   "entries": [
     {
       "name": "agartha",
       "kind": "bot",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "dir": "library/bots/agartha",
       "tags": [
         "alpha",
@@ -13,9 +13,10 @@
         "moonshot",
         "trailing-stop",
         "high-risk",
-        "memecoin"
+        "memecoin",
+        "continuous"
       ],
-      "description": "Moonshot trailing para Binance Alpha: una compra fija, sin stop-loss, trailing stop dinamico que protege ganancias. Una instancia = un simbolo.",
+      "description": "Trader continuo para Binance Alpha: compra fija, trailing stop dinamico, ciclos repetidos por simbolo. Una instancia = un simbolo.",
       "entry_point": "backtest.strategies:AgarthaStrategy",
       "registry_aliases": [],
       "reference_only": false,
@@ -24,7 +25,8 @@
       "presets": [
         "default",
         "moonshot_protected",
-        "partial_then_moon"
+        "partial_then_moon",
+        "single_shot"
       ]
     },
     {

@@ -46,40 +46,56 @@ def _full_sell_signal():
     return Signal(action="sell", size_pct=1.0, reason="agartha_trailing_stop")
 
 
-def test_agartha_single_shot_after_cycle_close():
-    strat = AgarthaStrategy(quote_order_qty_usdt=10.0, trailing_stop_pct=30.0, allow_reentry=False)
+def test_agartha_continuous_reentry_by_default():
+    """Por default Agartha es ciclo continuo: tras cerrar, vuelve a comprar."""
+    strat = AgarthaStrategy(quote_order_qty_usdt=10.0, trailing_stop_pct=30.0)
     strat.on_fill({"side": "buy", "price": 1.0}, None, _ctx(1.0, 90.0, 10.0, 1.0))
-    # El motor pasa ctx PRE-fill: position_qty aun positiva en el sell.
     strat.on_fill({"side": "sell", "price": 2.0}, _full_sell_signal(),
                   _ctx(2.0, 90.0, 10.0, 1.0))
     assert strat.cycles_closed == 1
     sig = strat.on_bar(_ctx(price=2.0, cash=110.0, position_qty=0.0, avg_entry=0.0))
-    assert sig.action == "hold"
-    assert sig.reason == "agartha_single_shot_done"
+    assert sig.action == "buy"
+    assert sig.reason == "agartha_reentry"
+    assert sig.metadata["cycle_index"] == 1
 
 
-def test_agartha_reentry_allowed_after_cycle_close():
-    strat = AgarthaStrategy(quote_order_qty_usdt=10.0, trailing_stop_pct=30.0, allow_reentry=True)
+def test_agartha_single_shot_when_max_cycles_one():
+    strat = AgarthaStrategy(quote_order_qty_usdt=10.0, trailing_stop_pct=30.0, max_cycles=1)
     strat.on_fill({"side": "buy", "price": 1.0}, None, _ctx(1.0, 90.0, 10.0, 1.0))
     strat.on_fill({"side": "sell", "price": 2.0}, _full_sell_signal(),
                   _ctx(2.0, 90.0, 10.0, 1.0))
     sig = strat.on_bar(_ctx(price=2.0, cash=110.0, position_qty=0.0, avg_entry=0.0))
+    assert sig.action == "hold"
+    assert sig.reason == "agartha_max_cycles_reached"
+
+
+def test_agartha_reentry_cooldown_blocks_for_n_bars():
+    strat = AgarthaStrategy(
+        quote_order_qty_usdt=10.0, trailing_stop_pct=30.0, reentry_cooldown_bars=3,
+    )
+    strat.on_fill({"side": "buy", "price": 1.0}, None, _ctx(1.0, 90.0, 10.0, 1.0))
+    strat.on_fill({"side": "sell", "price": 2.0}, _full_sell_signal(),
+                  _ctx(2.0, 90.0, 10.0, 1.0))
+    # 3 barras de cooldown
+    for i in range(3):
+        sig = strat.on_bar(_ctx(price=2.0, cash=110.0, position_qty=0.0, avg_entry=0.0))
+        assert sig.action == "hold", f"bar {i} should be cooldown"
+        assert sig.reason == "agartha_reentry_cooldown"
+    sig = strat.on_bar(_ctx(price=2.0, cash=110.0, position_qty=0.0, avg_entry=0.0))
     assert sig.action == "buy"
-    assert sig.reason == "agartha_initial_entry"
+    assert sig.reason == "agartha_reentry"
 
 
 def test_agartha_on_bar_fallback_detects_broker_close():
     """Si on_fill no detecto el cierre (ctx pre-fill stale), on_bar lo recupera."""
-    strat = AgarthaStrategy(quote_order_qty_usdt=10.0, trailing_stop_pct=30.0, allow_reentry=False)
-    # Forzamos estado de "ya hubo entrada" sin marcar cycles_closed.
+    strat = AgarthaStrategy(quote_order_qty_usdt=10.0, trailing_stop_pct=30.0, max_cycles=1)
     strat.entry_price = 1.0
     strat.peak_price = 1.5
     strat.bars_in_position = 10
-    # Siguiente vela: broker ya quedo plano.
     sig = strat.on_bar(_ctx(price=1.2, cash=110.0, position_qty=0.0, avg_entry=0.0))
     assert strat.cycles_closed == 1
     assert sig.action == "hold"
-    assert sig.reason == "agartha_single_shot_done"
+    assert sig.reason == "agartha_max_cycles_reached"
 
 
 def test_agartha_trailing_triggers_after_drawdown_from_peak():
@@ -195,14 +211,16 @@ def test_params_from_cli_agartha_contains_required_keys():
         breakeven_lock_pct=100.0,
         partial_tp_pct=0.0,
         partial_tp_size_pct=0.0,
-        allow_reentry=False,
+        max_cycles=0,
+        reentry_cooldown_bars=4,
     )
     out = params_from_cli(ns, "agartha")
     assert out["quote_order_qty_usdt"] == 10.0
     assert out["trailing_stop_pct"] == 30.0
     assert out["activation_profit_pct"] == 50.0
     assert out["breakeven_lock_pct"] == 100.0
-    assert out["allow_reentry"] is False
+    assert out["max_cycles"] == 0
+    assert out["reentry_cooldown_bars"] == 4
 
 
 def test_suggest_params_agartha_respects_overrides():

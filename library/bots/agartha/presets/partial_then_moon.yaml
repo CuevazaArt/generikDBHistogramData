@@ -1,10 +1,11 @@
-# Agartha "Partial + Moon": recupera el capital inicial a 3x (vende 35%) y
-# deja el resto correr con trailing amplio. Conservador para series largas.
+# Agartha "Partial + Moon": recupera capital a 3x (vende 35%) y deja el resto
+# correr con trailing amplio. Una sola apuesta por ciclo, pero permite re-entrar.
 quote_order_qty_usdt: 10.0
 trailing_stop_pct: 50.0
 activation_profit_pct: 100.0
 max_holding_bars: 0
 breakeven_lock_pct: 200.0
-partial_tp_pct: 200.0       # +200% sobre entry = 3x
-partial_tp_size_pct: 0.35   # vende 35% de la posicion
-allow_reentry: false
+partial_tp_pct: 200.0
+partial_tp_size_pct: 0.35
+max_cycles: 0
+reentry_cooldown_bars: 8

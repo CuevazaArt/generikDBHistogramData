@@ -1178,8 +1178,10 @@ def main() -> None:
                        help="Agartha: TP parcial a este % sobre entry (0=off).")
     p_run.add_argument("--partial_tp_size_pct", type=float, default=0.0,
                        help="Agartha: fraccion de la posicion a vender en TP parcial (0..1).")
-    p_run.add_argument("--allow_reentry", action="store_true",
-                       help="Agartha: permitir re-entrada tras cierre (default single-shot).")
+    p_run.add_argument("--max_cycles", type=int, default=0,
+                       help="Agartha: tope de ciclos compra-venta (0=ilimitado, 1=single-shot).")
+    p_run.add_argument("--reentry_cooldown_bars", type=int, default=0,
+                       help="Agartha: barras a esperar tras cerrar antes de re-entrar (0=inmediato).")
     # --- Fase 2: checkpoint flags (only on p_run; other subparsers untouched) ---
     p_run.add_argument("--checkpoint_every_bars", type=int, default=None)
     p_run.add_argument("--checkpoint_every_sim_seconds", type=int, default=None)
@@ -1213,7 +1215,8 @@ def main() -> None:
     p_opt.add_argument("--breakeven_lock_pct", type=float, default=0.0)
     p_opt.add_argument("--partial_tp_pct", type=float, default=0.0)
     p_opt.add_argument("--partial_tp_size_pct", type=float, default=0.0)
-    p_opt.add_argument("--allow_reentry", action="store_true")
+    p_opt.add_argument("--max_cycles", type=int, default=0)
+    p_opt.add_argument("--reentry_cooldown_bars", type=int, default=0)
     p_opt.add_argument(
         "--executor",
         choices=["ray", "joblib", "serial"],

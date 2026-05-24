@@ -1,5 +1,5 @@
-# Agartha default: trailing 30%, ciclo continuo (re-entrada automatica).
-# Capital de riesgo 10 USDT por instancia. Re-compra tras cada cierre.
+# Agartha single-shot: una sola compra, sin re-entry.
+# Equivalente al comportamiento previo a v0.3.0 (max_cycles=1).
 quote_order_qty_usdt: 10.0
 trailing_stop_pct: 30.0
 activation_profit_pct: 0.0
@@ -7,5 +7,5 @@ max_holding_bars: 0
 breakeven_lock_pct: 0.0
 partial_tp_pct: 0.0
 partial_tp_size_pct: 0.0
-max_cycles: 0
+max_cycles: 1
 reentry_cooldown_bars: 0

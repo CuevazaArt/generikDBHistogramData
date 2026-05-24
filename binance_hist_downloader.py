@@ -180,6 +180,18 @@ class BinanceDownloader:
             raise ValueError(f"Token '{base}' not found in Binance Alpha Token List.{extra}")
         return f"{resolved_alpha_id}{quote}"
 
+    # Alpha API result codes that legitimately terminate the stream (not errors).
+    # -1000 / "No records found" is returned once startTime is past the last
+    # available bar. Extend this set as Binance documents new sentinels.
+    ALPHA_END_OF_STREAM_CODES = frozenset({"-1000"})
+    ALPHA_END_OF_STREAM_MESSAGES = (
+        "No records found",
+        "No data",
+    )
+    # Codes documented as fatal (do not retry). All other non-000000 codes are
+    # treated as transient and retried with backoff.
+    ALPHA_FATAL_CODES = frozenset({"-2008", "-2011"})  # invalid symbol, unknown order, etc.
+
     def download_klines_alpha_api(
         self,
         symbol: str,
@@ -188,8 +200,18 @@ class BinanceDownloader:
         end_ts: Optional[int] = None,
         limit: int = 1000,
         sleep_on_rate_limit: float = 0.5,
+        max_retries: int = 6,
+        request_timeout: float = 30.0,
     ) -> Iterator[Tuple]:
-        """Yield kline rows from Binance Alpha Klines endpoint."""
+        """Yield kline rows from Binance Alpha Klines endpoint.
+
+        Hardened against:
+          - HTTP 429 (rate limit) -> respects Retry-After + exponential backoff
+          - HTTP 5xx / network exceptions -> retries with jitter, max_retries
+          - Empty / malformed JSON payload -> retry up to max_retries
+          - Alpha sentinel codes signaling end-of-stream -> graceful break
+          - Alpha fatal codes (invalid symbol, etc.) -> raise immediately
+        """
         alpha_symbol = symbol.strip().upper()
         if limit > 1500:
             limit = 1500
@@ -201,32 +223,74 @@ class BinanceDownloader:
             params["endTime"] = int(end_ts)
 
         while True:
-            try:
-                r = self.s.get(url, params=params, timeout=30)
-            except requests.RequestException as exc:
-                raise RuntimeError(f"Alpha klines request failed for {alpha_symbol}: {exc}") from exc
-            if r.status_code == 429:
-                time.sleep(sleep_on_rate_limit)
-                continue
-            if r.status_code != 200:
-                body = r.text[:300] if r.text else ""
-                raise RuntimeError(f"Alpha klines HTTP {r.status_code} for {alpha_symbol}: {body}")
-            try:
-                payload = r.json()
-            except Exception as exc:
-                raise RuntimeError(f"Alpha klines response is not valid JSON for {alpha_symbol}") from exc
+            attempt = 0
+            payload: Optional[Dict[str, Any]] = None
+            last_error: Optional[str] = None
+            while attempt <= max_retries:
+                try:
+                    r = self.s.get(url, params=params, timeout=request_timeout)
+                except requests.RequestException as exc:
+                    last_error = f"network error: {exc}"
+                    if attempt >= max_retries:
+                        raise RuntimeError(
+                            f"Alpha klines exhausted retries for {alpha_symbol}: {last_error}"
+                        ) from exc
+                    time.sleep(_retry_after_seconds(None, sleep_on_rate_limit, attempt))
+                    attempt += 1
+                    continue
+
+                if r.status_code == 429 or _is_transient_status(r.status_code):
+                    last_error = f"HTTP {r.status_code}"
+                    if attempt >= max_retries:
+                        body = r.text[:300] if r.text else ""
+                        raise RuntimeError(
+                            f"Alpha klines HTTP {r.status_code} for {alpha_symbol} (max retries): {body}"
+                        )
+                    time.sleep(_retry_after_seconds(r, sleep_on_rate_limit, attempt))
+                    attempt += 1
+                    continue
+
+                if r.status_code != 200:
+                    body = r.text[:300] if r.text else ""
+                    raise RuntimeError(f"Alpha klines HTTP {r.status_code} for {alpha_symbol}: {body}")
+
+                try:
+                    payload = r.json()
+                except Exception as exc:
+                    last_error = "invalid JSON"
+                    if attempt >= max_retries:
+                        raise RuntimeError(
+                            f"Alpha klines response is not valid JSON for {alpha_symbol}: {exc}"
+                        ) from exc
+                    time.sleep(_retry_after_seconds(r, sleep_on_rate_limit, attempt))
+                    attempt += 1
+                    continue
+                break
+
+            if payload is None:
+                raise RuntimeError(f"Alpha klines empty payload for {alpha_symbol}: {last_error}")
+
             code = str(payload.get("code"))
             message = str(payload.get("message", ""))
-            # End-of-stream sentinel: Alpha API returns -1000 / "No records found"
-            # when the requested startTime is past the last available bar. Treat
-            # as graceful termination instead of a fatal error.
-            if code != "000000" or not payload.get("success", False):
-                if "No records found" in message or code == "-1000":
+            success = bool(payload.get("success", False))
+
+            if code != "000000" or not success:
+                # End-of-stream sentinel: stop cleanly.
+                if (
+                    code in self.ALPHA_END_OF_STREAM_CODES
+                    or any(s in message for s in self.ALPHA_END_OF_STREAM_MESSAGES)
+                ):
                     break
+                # Fatal: raise.
+                if code in self.ALPHA_FATAL_CODES:
+                    raise RuntimeError(
+                        f"Alpha klines fatal error for {alpha_symbol}: code={code} message={message}"
+                    )
+                # Unknown non-zero code: be safe -> raise so caller learns.
                 raise RuntimeError(
-                    f"Alpha klines API error for {alpha_symbol}: "
-                    f"code={code} message={message}"
+                    f"Alpha klines API error for {alpha_symbol}: code={code} message={message}"
                 )
+
             data = payload.get("data")
             if not data:
                 break

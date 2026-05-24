@@ -1,14 +1,14 @@
 schema_version: 1
 name: agartha
 kind: bot
-version: 0.2.0
+version: 0.3.0
 author: ""
-description: "Moonshot trailing para Binance Alpha: una compra fija, sin stop-loss, trailing stop dinamico que protege ganancias. Una instancia = un simbolo."
+description: "Trader continuo para Binance Alpha: compra fija, trailing stop dinamico, ciclos repetidos por simbolo. Una instancia = un simbolo."
 entry_point: "backtest.strategies:AgarthaStrategy"
 registry_aliases: []
-tags: ["alpha", "binance-alpha", "moonshot", "trailing-stop", "high-risk", "memecoin"]
+tags: ["alpha", "binance-alpha", "moonshot", "trailing-stop", "high-risk", "memecoin", "continuous"]
 created_at: "2026-05-24T00:00:00Z"
-updated_at: "2026-05-24T16:00:00Z"
+updated_at: "2026-05-24T17:30:00Z"
 default_params:
   quote_order_qty_usdt: 10.0
   trailing_stop_pct: 30.0
@@ -17,11 +17,13 @@ default_params:
   breakeven_lock_pct: 0.0
   partial_tp_pct: 0.0
   partial_tp_size_pct: 0.0
-  allow_reentry: false
+  max_cycles: 0
+  reentry_cooldown_bars: 0
 search_space:
   trailing_stop_pct: { type: "float", min: 10.0, max: 60.0 }
   activation_profit_pct: { type: "float", min: 0.0, max: 50.0 }
   breakeven_lock_pct: { type: "float", min: 0.0, max: 30.0 }
+  reentry_cooldown_bars: { type: "int", min: 0, max: 96 }
 data_requirements:
   symbols: ["ALPHA_*", "*"]
   intervals: ["1m", "3m", "5m", "15m", "1h"]

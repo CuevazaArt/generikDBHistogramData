@@ -782,7 +782,12 @@ class AgarthaStrategy(StrategyBase):
 
     Cada instancia opera un (1) simbolo. La diversificacion se logra desplegando
     N instancias en paralelo. Disenada para admitir accesorios futuros
-    (partial TP, breakeven lock, time stop, re-entry) via params opcionales.
+    (partial TP, breakeven lock, time stop, ciclo limitado) via params opcionales.
+
+    Comportamiento por defecto: **ciclo continuo**. Tras cerrar por trailing
+    stop, el bot vuelve a comprar la siguiente oportunidad disponible en el
+    mismo simbolo (capital queda expuesto al mercado mientras haya cash).
+    Para limitar a una sola apuesta se usa `max_cycles=1`.
 
     Parametros:
         quote_order_qty_usdt: notional de la compra inicial (capital de riesgo).
@@ -794,8 +799,10 @@ class AgarthaStrategy(StrategyBase):
             el trailing nunca baja del entry (lock de breakeven). 0 = off.
         partial_tp_pct / partial_tp_size_pct: TP parcial opcional al alcanzar
             X% sobre entry, vendiendo Y% de la posicion. 0 = off.
-        allow_reentry: si True, tras cerrar puede volver a comprar (default False
-            -- una sola apuesta por instancia).
+        max_cycles: tope de ciclos compra-venta. 0 = ilimitado (default).
+            Usar 1 para single-shot clasico.
+        reentry_cooldown_bars: barras a esperar tras cerrar antes de la siguiente
+            entrada. 0 = inmediato (default).
     """
 
     name = "agartha"
@@ -809,7 +816,8 @@ class AgarthaStrategy(StrategyBase):
         breakeven_lock_pct: float = 0.0,
         partial_tp_pct: float = 0.0,
         partial_tp_size_pct: float = 0.0,
-        allow_reentry: bool = False,
+        max_cycles: int = 0,
+        reentry_cooldown_bars: int = 0,
         **params,
     ):
         super().__init__(
@@ -820,7 +828,8 @@ class AgarthaStrategy(StrategyBase):
             breakeven_lock_pct=breakeven_lock_pct,
             partial_tp_pct=partial_tp_pct,
             partial_tp_size_pct=partial_tp_size_pct,
-            allow_reentry=allow_reentry,
+            max_cycles=max_cycles,
+            reentry_cooldown_bars=reentry_cooldown_bars,
             **params,
         )
         self.quote_order_qty_usdt = max(0.1, float(quote_order_qty_usdt))
@@ -830,7 +839,8 @@ class AgarthaStrategy(StrategyBase):
         self.breakeven_lock_pct = max(0.0, float(breakeven_lock_pct))
         self.partial_tp_pct = max(0.0, float(partial_tp_pct))
         self.partial_tp_size_pct = max(0.0, min(1.0, float(partial_tp_size_pct)))
-        self.allow_reentry = bool(allow_reentry)
+        self.max_cycles = max(0, int(max_cycles))  # 0 = ilimitado
+        self.reentry_cooldown_bars = max(0, int(reentry_cooldown_bars))
         # Estado serializable
         self.entry_price: float = 0.0
         self.peak_price: float = 0.0
@@ -838,6 +848,7 @@ class AgarthaStrategy(StrategyBase):
         self.trailing_active: bool = False
         self.partial_tp_done: bool = False
         self.cycles_closed: int = 0
+        self.bars_since_last_close: int = 0
 
     def _reset_position_state(self) -> None:
         self.entry_price = 0.0
@@ -858,18 +869,28 @@ class AgarthaStrategy(StrategyBase):
             self.cycles_closed += 1
             self._reset_position_state()
 
-        # Sin posicion: comprar si nunca compramos (o si re-entry esta permitido).
+        # Sin posicion: comprar si quedan ciclos por hacer (default ilimitado).
         if ctx.position_qty <= 0 or self.entry_price <= 0:
-            if self.cycles_closed > 0 and not self.allow_reentry:
-                return Signal(action="hold", reason="agartha_single_shot_done")
+            # Tope de ciclos (0 = ilimitado).
+            if self.max_cycles > 0 and self.cycles_closed >= self.max_cycles:
+                return Signal(action="hold", reason="agartha_max_cycles_reached")
+            # Cooldown entre ciclos (0 = inmediato).
+            if self.reentry_cooldown_bars > 0 and self.cycles_closed > 0:
+                if self.bars_since_last_close < self.reentry_cooldown_bars:
+                    self.bars_since_last_close += 1
+                    return Signal(action="hold", reason="agartha_reentry_cooldown")
             if ctx.cash < self.quote_order_qty_usdt:
                 return Signal(action="hold", reason="insufficient_cash")
             size_pct = max(0.01, min(1.0, self.quote_order_qty_usdt / max(ctx.cash, 1e-9)))
+            reason = "agartha_initial_entry" if self.cycles_closed == 0 else "agartha_reentry"
             return Signal(
                 action="buy",
                 size_pct=size_pct,
-                reason="agartha_initial_entry",
-                metadata={"target_notional": self.quote_order_qty_usdt},
+                reason=reason,
+                metadata={
+                    "target_notional": self.quote_order_qty_usdt,
+                    "cycle_index": self.cycles_closed,
+                },
             )
 
         # En posicion: actualizar peak y contador de barras.
@@ -938,12 +959,13 @@ class AgarthaStrategy(StrategyBase):
         side = fill.get("side")
         fill_price = float(fill.get("price", 0.0) or 0.0)
         if side == "buy" and fill_price > 0:
-            # Compra inicial: ancla precio, resetea peak/bars/trailing.
+            # Compra (inicial o re-entrada): ancla precio, resetea peak/bars/trailing.
             self.entry_price = fill_price
             self.peak_price = fill_price
             self.bars_in_position = 0
             self.trailing_active = self.activation_profit_pct == 0
             self.partial_tp_done = False
+            self.bars_since_last_close = 0
         elif side == "sell":
             # El motor pasa ctx PRE-fill (ver engine.run_backtest), por lo que
             # ctx.position_qty no refleja la qty residual post-venta. Detectamos
@@ -952,6 +974,7 @@ class AgarthaStrategy(StrategyBase):
             if size_pct >= 0.999:
                 self.cycles_closed += 1
                 self._reset_position_state()
+                self.bars_since_last_close = 0
 
     def export_state(self) -> dict:
         return {
@@ -961,6 +984,7 @@ class AgarthaStrategy(StrategyBase):
             "trailing_active": bool(self.trailing_active),
             "partial_tp_done": bool(self.partial_tp_done),
             "cycles_closed": int(self.cycles_closed),
+            "bars_since_last_close": int(self.bars_since_last_close),
         }
 
     def import_state(self, state: dict) -> None:
@@ -972,3 +996,4 @@ class AgarthaStrategy(StrategyBase):
         self.trailing_active = bool(state.get("trailing_active", False))
         self.partial_tp_done = bool(state.get("partial_tp_done", False))
         self.cycles_closed = int(state.get("cycles_closed", 0) or 0)
+        self.bars_since_last_close = int(state.get("bars_since_last_close", 0) or 0)

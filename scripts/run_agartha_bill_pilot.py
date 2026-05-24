@@ -183,7 +183,9 @@ def main() -> int:
     parser.add_argument("--breakeven_lock_pct", type=float, default=0.0)
     parser.add_argument("--partial_tp_pct", type=float, default=0.0)
     parser.add_argument("--partial_tp_size_pct", type=float, default=0.0)
-    parser.add_argument("--allow_reentry", action="store_true")
+    parser.add_argument("--max_cycles", type=int, default=0,
+                        help="0=ilimitado (default, ciclo continuo); 1=single-shot.")
+    parser.add_argument("--reentry_cooldown_bars", type=int, default=0)
     parser.add_argument("--fee_rate", type=float, default=0.001)
     parser.add_argument("--slippage_bps", type=float, default=10.0,
                         help="Alpha tokens: slippage mas alto que spot maduro.")
@@ -199,7 +201,8 @@ def main() -> int:
         "breakeven_lock_pct": float(args.breakeven_lock_pct),
         "partial_tp_pct": float(args.partial_tp_pct),
         "partial_tp_size_pct": float(args.partial_tp_size_pct),
-        "allow_reentry": bool(args.allow_reentry),
+        "max_cycles": int(args.max_cycles),
+        "reentry_cooldown_bars": int(args.reentry_cooldown_bars),
     }
     cfg = EngineConfig(
         db_path=args.db,

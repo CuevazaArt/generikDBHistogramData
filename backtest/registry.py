@@ -150,7 +150,8 @@ def params_from_cli(args: Any, strategy_name: str) -> Dict[str, Any]:
             "breakeven_lock_pct": float(getattr(args, "breakeven_lock_pct", 0.0)),
             "partial_tp_pct": float(getattr(args, "partial_tp_pct", 0.0)),
             "partial_tp_size_pct": float(getattr(args, "partial_tp_size_pct", 0.0)),
-            "allow_reentry": bool(getattr(args, "allow_reentry", False)),
+            "max_cycles": int(getattr(args, "max_cycles", 0)),
+            "reentry_cooldown_bars": int(getattr(args, "reentry_cooldown_bars", 0)),
         }
     return {
         "fast": int(args.fast),
@@ -352,6 +353,7 @@ def suggest_params(trial: Any, strategy_name: str, search_overrides: Optional[Di
         ap_min, ap_max = _get_float_range(overrides, "activation_profit_pct_min", "activation_profit_pct_max", 0.0, 50.0)
         be_min, be_max = _get_float_range(overrides, "breakeven_lock_pct_min", "breakeven_lock_pct_max", 0.0, 30.0)
         mh_min, mh_max = _get_int_range(overrides, "max_holding_bars_min", "max_holding_bars_max", 0, 0)
+        cd_min, cd_max = _get_int_range(overrides, "reentry_cooldown_bars_min", "reentry_cooldown_bars_max", 0, 0)
         params = {
             "quote_order_qty_usdt": float(overrides.get("quote_order_qty_usdt", 10.0)),
             "trailing_stop_pct": float(trial.suggest_float("trailing_stop_pct", ts_min, ts_max)),
@@ -360,7 +362,8 @@ def suggest_params(trial: Any, strategy_name: str, search_overrides: Optional[Di
             "max_holding_bars": int(trial.suggest_int("max_holding_bars", mh_min, mh_max)) if mh_max > 0 else 0,
             "partial_tp_pct": 0.0,
             "partial_tp_size_pct": 0.0,
-            "allow_reentry": False,
+            "max_cycles": int(overrides.get("max_cycles", 0)),
+            "reentry_cooldown_bars": int(trial.suggest_int("reentry_cooldown_bars", cd_min, cd_max)) if cd_max > 0 else 0,
         }
         return params
     fast_min, fast_max = _get_int_range(overrides, "fast_min", "fast_max", 5, 40)
