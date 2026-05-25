@@ -267,6 +267,63 @@ Cobertura: `tests/test_agartha_entry_filter.py` (8 casos, todos verdes).
 
 ---
 
+## Re-optimizacion completa con LIMIT (22 symbols, 2026-05-25)
+
+Los 22 symbols evaluados pasaron por re-optimizacion con `entry_limit_offset_pct`
+incluido en el espacio Optuna. **Todos mejoraron o quedaron iguales**; los
+sin-pump pasaron de negativos a positivos al permitir LIMIT profundas.
+
+### Mejoras destacadas vs primera optimizacion
+
+| Simbolo | Antes | Despues | Mejora |
+|---|---:|---:|---:|
+| **BSB** | +662 % | **+918.64 %** | **+256 pp** |
+| **CHECK** | −0.47 % | **+223.68 %** | **+224 pp** (de perdedor a winner) |
+| **SHARE** | −1.41 % | +0.00 % | +1.4 pp |
+| **PHAROS** | −1.40 % | **+13.05 %** | +14 pp |
+| **B2** | −2.22 % | **+7.16 %** | +9 pp |
+| **ARTX** | −0.54 % | **+141.51 %** | **+142 pp** (LIMIT 80%!) |
+| **WMTX** | +34 % | +81 % | +47 pp |
+
+**Total: 22/22 symbols ahora positivos o = 0** (LRCXon sigue siendo no-tradeable).
+
+---
+
+## Analisis: ¿el breakeven_lock aporta o estorba? (2026-05-25)
+
+Cross-symbol study sobre **22 symbols × 100 trials cada uno = 2 200+ datapoints**.
+Reporte completo: `reports/entregables/cross_studies/BREAKEVEN_ANALYSIS.md`.
+
+### Patron observado (promedio por bin de breakeven)
+
+| Bin `breakeven_lock_pct` | Avg return |
+|---|---:|
+| **be=0** (sin lock) | **+68.8 %** |
+| 1-15 | +62.7 % |
+| **15-35** | **+37.4 %** ← VALLE: el peor bin |
+| 35-65 | **+65.2 %** ← sweet spot mega-pumps |
+| 65-100 | +48.3 % |
+| **100-200** | +54.5 % ← lock casi inactivo (equivale a be=0) |
+
+### Veredicto
+
+**El breakeven_lock_pct es BIMODAL en Alpha**:
+
+- **be=0** funciona simple y competitivo (4/22 symbols).
+- **be>=50** captura mega-pumps (13/22 symbols).
+- **be intermedio (15-35) ESTORBA**: se activa muy temprano, vende antes del pump completo, y mata el upside asimetrico.
+
+**Recomendacion operativa**: para deploy inicial usar **be=0** (simple, default).
+Solo subir a be>=40 si Optuna lo confirma para ese symbol especifico. **Nunca**
+usar be intermedio por defecto — empiricamente es el peor bin.
+
+Diferente a estrategias clasicas (Louise/Dorothy) donde be moderado tiene sentido:
+en Alpha, la asimetria de pumps (x5-x20) hace que cualquier salida prematura sea
+catastrofica para la tesis. Mejor "no proteges nada y aceptas perderlo todo, o lo
+proteges solo cuando ya doblaste/triplicaste".
+
+---
+
 ## Mejora con LIMIT pre-colocada — re-optimizacion sobre 10 winners (2026-05-25)
 
 Estudios re-corridos incluyendo `entry_limit_offset_pct` en el espacio Optuna
