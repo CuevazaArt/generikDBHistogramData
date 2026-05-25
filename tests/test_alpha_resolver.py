@@ -95,15 +95,46 @@ def test_alpha_end_of_stream_codes_include_no_records():
 
 
 def test_alpha_symbols_for_alpha_id_returns_empty_for_catalog_only_tokens():
-    """Caso LRCXon: token registrado en token list pero sin par tradeable.
-
-    El metodo `alpha_symbols_for_alpha_id` debe devolver lista vacia cuando
-    el alphaId no aparece en exchange-info. El pipeline orquestador detecta
-    esto y falla con un mensaje claro (sin intentar descargar).
-    """
+    """Caso LRCXon: token registrado en token list pero sin par tradeable."""
     dl = BinanceDownloader()
-    # Simulamos exchange-info SIN el alphaId pedido
     fake_info = {"symbols": [{"symbol": "ALPHA_100USDT"}, {"symbol": "ALPHA_200USDC"}]}
     with patch.object(dl, "get_alpha_exchange_info", return_value=fake_info):
-        out = dl.alpha_symbols_for_alpha_id("ALPHA_899")
-        assert out == []
+        assert dl.alpha_symbols_for_alpha_id("ALPHA_899") == []
+
+
+def test_alpha_symbols_for_alpha_id_exact_match_no_prefix_collision():
+    """REGRA CRITICA (2026-05-25): match exacto, no startswith.
+
+    alphaId ALPHA_2 NO debe matchear ALPHA_23USDT, ALPHA_200USDT, etc.
+    Antes del fix, todos esos colisionaban (500+ falsos positivos para CHEEMS).
+    """
+    dl = BinanceDownloader()
+    fake_info = {"symbols": [
+        {"symbol": "ALPHA_2USDT"},      # match exacto
+        {"symbol": "ALPHA_2USDC"},      # match exacto
+        {"symbol": "ALPHA_23USDT"},     # NO matchear (es ALPHA_23)
+        {"symbol": "ALPHA_200USDT"},    # NO matchear (es ALPHA_200)
+        {"symbol": "ALPHA_2000USDT"},   # NO matchear
+        {"symbol": "ALPHA_27USDC"},     # NO matchear
+    ]}
+    with patch.object(dl, "get_alpha_exchange_info", return_value=fake_info):
+        out = dl.alpha_symbols_for_alpha_id("ALPHA_2")
+        assert out == ["ALPHA_2USDT", "ALPHA_2USDC"]
+        # ALPHA_23 sigue funcionando para si mismo
+        out23 = dl.alpha_symbols_for_alpha_id("ALPHA_23")
+        assert "ALPHA_23USDT" in out23
+        assert "ALPHA_2USDT" not in out23
+
+
+def test_alpha_symbols_for_alpha_id_orders_usdt_first():
+    """Prioridad: USDT > USDC > U para que el resolver prefiera USDT."""
+    dl = BinanceDownloader()
+    fake_info = {"symbols": [
+        {"symbol": "ALPHA_500U"},
+        {"symbol": "ALPHA_500USDC"},
+        {"symbol": "ALPHA_500USDT"},
+    ]}
+    with patch.object(dl, "get_alpha_exchange_info", return_value=fake_info):
+        out = dl.alpha_symbols_for_alpha_id("ALPHA_500")
+        assert out[0] == "ALPHA_500USDT"
+        assert out[1] == "ALPHA_500USDC"

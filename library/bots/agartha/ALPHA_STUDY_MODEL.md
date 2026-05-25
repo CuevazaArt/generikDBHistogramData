@@ -137,6 +137,7 @@ son **adaptaciones de produccion** que ya estan en el codigo.
 | **Mismo human symbol con multiples alphaIds** (cross-chain duplicates) | PLAY: `ALPHA_822` (Base, activo, liq 831k) y `ALPHA_300` (BSC, offline+offsell) | Scoring `(not offline, not offsell, liquidity, volume24h)`; warning con alternativas descartadas |
 | **Par USDT registrado pero sin velas** (exchange-info incluye el par, klines devuelve 0) | PLAY: `ALPHA_822USDT` listado pero vacio, solo `ALPHA_822USDC` tiene datos | **Sample probe** con `limit=5` por candidato; descartar si vacio y probar el siguiente quote |
 | **Token registrado en token list pero sin par tradeable** (catalogo inactivo) | LRCXon (`ALPHA_899`, BSC, `liquidity=None`, `volume24h=0`, `tradeable=[]`) | Detectado con `alpha_symbols_for_alpha_id`; pipeline falla con mensaje claro `"AlphaId X sin pares tradeables en exchange-info"`. **No descargar.** |
+| **Prefix collision en alphaIds cortos** (CRITICA - silent data corruption) | CHEEMS (`ALPHA_2`) tomaba como tradeable `[ALPHA_23USDT, ALPHA_24USDT, ALPHA_200USDT, ..., 500+ symbols]` y descargaba klines de OTRO token bajo el nombre CHEEMS | **FIX 2026-05-25**: `alpha_symbols_for_alpha_id` ahora hace match EXACTO contra `{alphaId}USDT`, `{alphaId}USDC`, `{alphaId}U` (set conocido de sufijos Alpha). Antes usaba `startswith`. Detectado al investigar 23 fails de batch 200 exotic. Test de regresion en `test_alpha_symbols_for_alpha_id_exact_match_no_prefix_collision`. **Esta regla pudo haber contaminado resultados previos de symbols con alphaId 1-2 digitos**. |
 
 Cuando aparezca una nueva regla:
 1. Logguearla en este archivo (tabla anterior).
@@ -286,6 +287,59 @@ sin-pump pasaron de negativos a positivos al permitir LIMIT profundas.
 | **WMTX** | +34 % | +81 % | +47 pp |
 
 **Total: 22/22 symbols ahora positivos o = 0** (LRCXon sigue siendo no-tradeable).
+
+---
+
+## Batch 200 exoticos + descubrimiento de bug critico (2026-05-25 tarde)
+
+Lanzado batch paralelo de 200 symbols incluyendo offline-allowed y baja liquidez.
+
+### Resultados
+- **177/200 OK** en 32.4 min (6 workers paralelos)
+- **23 fallidos** en <4s cada uno (todos en resolucion, no en optuna)
+- **n=281 studies acumulados**, 225 positivos (**80 %**), avg return **+207.8 %**
+
+### Nuevos winners destacados
+
+| Symbol | Return |
+|---|---:|
+| **VVV** | +1660.81 % |
+| **SKYAI** | +1607.64 % |
+| **SIREN** | +1424.56 % |
+| **TROLL** | +1377.86 % |
+| **DONKEY** | +1064.09 % |
+| **B** | +928.33 % |
+| **PUMPBTC** | +796.21 % |
+| **REX** | +752.19 % |
+| **JELLYJELLY** | +687.40 % |
+| **HEMI** | +670.56 % |
+
+### Bug critico descubierto: prefix collision en alphaIds cortos
+
+**Sintoma:** 23 symbols como VIRTUAL, CHEEMS, AIXBT, ONDO fallaron al resolver
+porque su `alpha_symbols_for_alpha_id(target=ALPHA_2)` devolvia **>500 pares
+falsos** (todos los `ALPHA_23*, ALPHA_24*, ALPHA_200*, ...`) por `startswith`
+matching.
+
+**Riesgo retroactivo:** symbols con alphaId 1-2 digitos podian estar
+descargando klines de OTROS tokens bajo el nombre equivocado. Si un study
+previo era de CHEEMS (alphaId=2) y el resolver tomaba como "primer tradeable"
+ALPHA_23USDT (un token totalmente distinto), el equity y los params optimos
+correspondian al token equivocado SILENCIOSAMENTE.
+
+**Fix:** match exacto contra `{alphaId}{suffix}` donde suffix ∈ {USDT, USDC, U}.
+Implementado en `binance_hist_downloader.py:alpha_symbols_for_alpha_id` con
+test de regresion en `test_alpha_resolver.py`.
+
+**Verificacion post-fix:** los 23 fallidos al re-correrlos fallaron de nuevo
+pero por la razon legitima: todos son `offline=True` con sus pares `ALPHA_*`
+registrados en exchange-info pero **klines API devuelve 0 velas** (caso PLAY
+documentado). El fix evito descarga de datos basura bajo nombres equivocados.
+
+**Symbols afectados retroactivamente** (alphaId 1-2 digitos, evaluados antes
+del fix): **revisar BILL (`ALPHA_953`), PLAY (`ALPHA_822`)** — ambos tienen
+alphaIds >=3 digitos asi que NO fueron afectados. Cualquier symbol con alphaId
+< 100 podria estar contaminado; verificar caso por caso si se vuelven a usar.
 
 ---
 

@@ -171,20 +171,38 @@ class BinanceDownloader:
             )
         return payload.get("data") or {}
 
+    # Suffix patterns para construir pares Alpha tradeables (regla observada
+    # en exchange-info): ALPHA_<id>USDT | ALPHA_<id>USDC | ALPHA_<id>U.
+    ALPHA_QUOTE_SUFFIXES = ("USDT", "USDC", "U")
+
     def alpha_symbols_for_alpha_id(self, alpha_id: str) -> List[str]:
         """Return tradeable pair symbols (e.g. ALPHA_964USDC) for a given alphaId.
 
         Some Alpha tokens quote only against USDC, others against USDT. The
-        token list does not state this; only exchange-info does. We list all
-        symbols that begin with `<alphaId>` so the caller picks the right one.
+        token list does not state this; only exchange-info does.
+
+        Critical fix (2026-05-25, batch 200 exotic): el match anterior usaba
+        ``startswith``, lo que provocaba colisiones graves para alphaIds
+        cortos. Ejemplo: alpha_id="ALPHA_2" matcheaba ALPHA_23USDT, ALPHA_24USDT,
+        ALPHA_200USDT, ALPHA_2000USDT, etc (500+ symbols falsos). Resultado:
+        el resolver tomaba el "primer tradeable" que era un token completamente
+        distinto y descargaba sus klines bajo el nombre original.
+
+        Solucion: match exacto de `alphaId + quote_suffix`. El conjunto de
+        sufijos validos esta en ALPHA_QUOTE_SUFFIXES.
         """
         target = str(alpha_id).upper()
+        # Construir los pares exactos esperados:
+        exact_pairs = {f"{target}{q}" for q in self.ALPHA_QUOTE_SUFFIXES}
         info = self.get_alpha_exchange_info()
         symbols = []
         for s in info.get("symbols", []):
             sym = str(s.get("symbol", "")).upper()
-            if sym.startswith(target):
+            if sym in exact_pairs:
                 symbols.append(sym)
+        # Mantener orden preferido: USDT > USDC > U
+        order = {f"{target}USDT": 0, f"{target}USDC": 1, f"{target}U": 2}
+        symbols.sort(key=lambda x: order.get(x, 99))
         return symbols
 
     def resolve_alpha_symbol(self, symbol: str) -> str:
