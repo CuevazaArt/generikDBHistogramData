@@ -269,6 +269,7 @@ def main() -> int:
                 "--trailing_stop_pct", str(best_params.get("trailing_stop_pct", 30.0)),
                 "--activation_profit_pct", str(best_params.get("activation_profit_pct", 0.0)),
                 "--breakeven_lock_pct", str(best_params.get("breakeven_lock_pct", 0.0)),
+                "--entry_limit_offset_pct", str(best_params.get("entry_limit_offset_pct", 0.0)),
                 "--max_cycles", str(mc),
                 "--output_root", args.output_root,
             ]

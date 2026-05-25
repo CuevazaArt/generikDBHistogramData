@@ -267,6 +267,35 @@ Cobertura: `tests/test_agartha_entry_filter.py` (8 casos, todos verdes).
 
 ---
 
+## Mejora con LIMIT pre-colocada — re-optimizacion sobre 10 winners (2026-05-25)
+
+Estudios re-corridos incluyendo `entry_limit_offset_pct` en el espacio Optuna
+(`{0, 1, 2, 3, 5, 8, 12, 18, 25}` normales + `{0, 35, 50, 65, 80}` extremos).
+
+| Simbolo | Anterior best | **Nuevo best (con LIMIT)** | Best offset | Mejora |
+|---|---:|---:|---:|---:|
+| **BSB** | +662 % | **+918.64 %** (trail 95, act 50, be 40) | **25 %** | **+256 pp** |
+| **BTW** | +163 % | **+215.61 %** (trail 20, be 60) | **3 %** | +52 pp |
+| **UP** | +330 % | **+368.11 %** (trail 75, act 65, be 70) | **8 %** | +38 pp |
+| **JCT** | +185 % | **+219.20 %** (trail 12, act 250, be 5) | **8 %** | +33 pp |
+| **STABLE** | +114 % | **+135.30 %** (trail 50, act 250) | **8 %** | +21 pp |
+| **PLAY** | +242 % | **+260.88 %** (trail 8, act 250) | **2 %** | +19 pp |
+| **EDGE** | +112 % | **+113.82 %** (trail 3, act 120, be 150) | **5 %** | +2 pp |
+| **BILL** | +483 % | +482.81 % (trail 30, act 50, be 150) | 0 % | 0 (pump directo) |
+| **TRIA** | +262 % | +262.24 % (trail 5, act 250, be 150) | 0 % | 0 (sweet spot ya en pico) |
+| **ZEST** | +144 % | +144.43 % (trail 5, act 150, be 85) | 0 % | 0 |
+
+**7 de 10 (70 %)** mejoraron con LIMIT >0 %. Offsets ganadores: mayormente **2-8 %**;
+BSB destaca con **25 %** (combina con trailing 95 % extremo). Los tokens que
+pumpean directo desde la entrada (BILL) o que ya tenian sweet spot saturado
+(TRIA, ZEST) prefieren offset=0.
+
+Cartera teorica (10 instancias x 10 USDT = 100 USDT):
+- Sin LIMIT: +270 USDT (suma de mega-winners)
+- **Con LIMIT optimizada: +312 USDT (+42 USDT = +15.5 % mejora)**
+
+---
+
 ## Estudios realizados
 
 | Simbolo | Fecha | Best return | Best trailing | Notas |

@@ -46,18 +46,20 @@ except ImportError:  # pragma: no cover
     plt = None
 
 
-# Discretizacion principal (saltos finos) -- 18 x 9 x 7 = 1134 combinaciones posibles
+# Discretizacion principal (saltos finos) -- 4 dimensiones
 NORMAL_TRAILING = [
     8.0, 10.0, 12.0, 15.0, 18.0, 20.0, 22.0, 25.0, 28.0,
     30.0, 33.0, 35.0, 38.0, 40.0, 45.0, 50.0, 55.0, 60.0,
 ]
 NORMAL_ACTIVATION = [0.0, 5.0, 10.0, 20.0, 30.0, 40.0, 50.0, 65.0, 80.0]
 NORMAL_BREAKEVEN = [0.0, 5.0, 10.0, 20.0, 30.0, 40.0, 60.0]
+NORMAL_LIMIT_OFFSET = [0.0, 1.0, 2.0, 3.0, 5.0, 8.0, 12.0, 18.0, 25.0]
 
 # Combinaciones ridiculas (extremos)
 EXTREME_TRAILING = [0.5, 1.0, 2.0, 3.0, 5.0, 70.0, 75.0, 80.0, 85.0, 90.0, 95.0]
 EXTREME_ACTIVATION = [0.0, 90.0, 100.0, 120.0, 150.0, 180.0, 200.0, 250.0]
 EXTREME_BREAKEVEN = [0.0, 70.0, 75.0, 85.0, 100.0, 125.0, 150.0]
+EXTREME_LIMIT_OFFSET = [0.0, 35.0, 50.0, 65.0, 80.0]
 
 
 def _utc_iso() -> str:
@@ -68,8 +70,16 @@ def _generate_extreme_combos(n: int, seed: int = 42) -> List[Dict[str, float]]:
     """N combinaciones unicas de extremos (cartesian product subsampled)."""
     rng = random.Random(seed)
     full = [
-        {"trailing_stop_pct": t, "activation_profit_pct": a, "breakeven_lock_pct": b}
-        for t in EXTREME_TRAILING for a in EXTREME_ACTIVATION for b in EXTREME_BREAKEVEN
+        {
+            "trailing_stop_pct": t,
+            "activation_profit_pct": a,
+            "breakeven_lock_pct": b,
+            "entry_limit_offset_pct": o,
+        }
+        for t in EXTREME_TRAILING
+        for a in EXTREME_ACTIVATION
+        for b in EXTREME_BREAKEVEN
+        for o in EXTREME_LIMIT_OFFSET
     ]
     rng.shuffle(full)
     return full[:n]
@@ -98,6 +108,8 @@ def _build_objective(
                                                      NORMAL_ACTIVATION + EXTREME_ACTIVATION))
         breakeven = float(trial.suggest_categorical("breakeven_lock_pct",
                                                     NORMAL_BREAKEVEN + EXTREME_BREAKEVEN))
+        limit_offset = float(trial.suggest_categorical("entry_limit_offset_pct",
+                                                       NORMAL_LIMIT_OFFSET + EXTREME_LIMIT_OFFSET))
         params = {
             "quote_order_qty_usdt": float(quote_order_qty_usdt),
             "trailing_stop_pct": trailing,
@@ -108,6 +120,9 @@ def _build_objective(
             "partial_tp_size_pct": 0.0,
             "max_cycles": int(max_cycles),
             "reentry_cooldown_bars": 0,
+            "entry_limit_offset_pct": limit_offset,
+            "entry_limit_expiry_bars": 0,
+            "entry_limit_reprice_on_expiry": False,
         }
         cfg = EngineConfig(
             db_path=db_path,
