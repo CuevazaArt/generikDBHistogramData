@@ -53,20 +53,23 @@ entregables/
 
 ---
 
-## Espacio de busqueda Optuna
+## Espacio de busqueda Optuna (granularidad fina)
 
-### Saltos grandes (80 trials)
-- `trailing_stop_pct`: `{10, 15, 20, 25, 28, 30, 35, 40, 50, 60}`
-- `activation_profit_pct`: `{0, 10, 25, 50, 75}`
-- `breakeven_lock_pct`: `{0, 10, 25, 50}`
+### Saltos finos (80 trials)
+- `trailing_stop_pct`: `{8, 10, 12, 15, 18, 20, 22, 25, 28, 30, 33, 35, 38, 40, 45, 50, 55, 60}` (18 valores)
+- `activation_profit_pct`: `{0, 5, 10, 20, 30, 40, 50, 65, 80}` (9 valores)
+- `breakeven_lock_pct`: `{0, 5, 10, 20, 30, 40, 60}` (7 valores)
+- Total combinaciones: **1 134** (TPE explora 80 con sampling inteligente).
 
 ### Ridiculos / extremos (20 trials forzados via `enqueue_trial`)
-- `trailing_stop_pct`: `{1, 3, 5, 75, 80, 90}`
-- `activation_profit_pct`: `{0, 100, 150, 200}`
-- `breakeven_lock_pct`: `{0, 75, 100}`
+- `trailing_stop_pct`: `{0.5, 1, 2, 3, 5, 70, 75, 80, 85, 90, 95}`
+- `activation_profit_pct`: `{0, 90, 100, 120, 150, 180, 200, 250}`
+- `breakeven_lock_pct`: `{0, 70, 75, 85, 100, 125, 150}`
 
 Objetivo: detectar **oportunidades ocultas** que TPE no exploraria por si solo,
 y mapear el espectro completo de comportamiento del bot frente al simbolo.
+Validado empiricamente: BSB (+662%) y UP (+330%) salieron del cluster extremo
+(trailing 80% + breakeven 75%), no del cluster normal.
 
 ---
 
@@ -163,6 +166,57 @@ Cobertura de tests: `tests/test_alpha_resolver.py` (regresion de cada regla).
 
 ---
 
+## Accesorio: Entry Gate (`backtest/agartha_entry_filter.py`)
+
+Modulo opcional para identificar el **momento favorable de armado** del bot
+(en lugar de comprar "al activar"). Diseñado para uso live (WS-driven via
+`AgarthaWsMonitor`) y testeable en backtest.
+
+### 3 capas (configurable por activo)
+
+1. **Donchian low(N)** — trigger: precio actual <= `min(low, N velas)` del
+   timeframe operativo (default N=20 en 15m = 5h de contexto).
+2. **Macro MA filter** — bloquea si precio < `MA(M, source) * (1 - drop_pct)`
+   en timeframe superior (default M=20 en 4h, drop_pct=30%). Evita cuchillo cayendo.
+3. **Momentum uptick** — exige que la ultima vela cerrara arriba de la anterior
+   (o que la HA-candle sea verde). Confirma reversion iniciada.
+
+`ARMED = Layer1 AND Layer2 AND Layer3`. Cualquier capa puede desactivarse
+seteando su lookback a 0 (Layer 3 con `require_momentum_uptick=False`).
+
+### Por que es mejor que `MM(3, low) 4h` sola
+
+- `MM(3, low)` es solo una version reactiva de Layer 2 con N pequeño.
+- En crash continuo la MA cae con el precio -> compra cada vela.
+- No tiene confirmacion de reversion (Layer 3) -> compra mid-crash.
+- No tiene Donchian (Layer 1) -> compra en wobbles intrabar sin contexto.
+
+### Uso live (stub `AgarthaWsMonitor`)
+
+```python
+from backtest.agartha_entry_filter import AgarthaWsMonitor, EntryGateConfig
+
+cfg = EntryGateConfig(
+    donchian_lookback=20, donchian_tolerance_pct=0.5,
+    macro_ma_lookback=20, macro_ma_source="close", macro_drop_pct=30.0,
+    require_momentum_uptick=True,
+)
+mon = AgarthaWsMonitor(cfg)
+
+# WS-driven feed:
+ws_kline_15m.on_message(lambda c: mon.push_operating_candle(c))
+ws_kline_4h.on_message(lambda c: mon.push_macro_candle(c))
+ws_trade.on_message(lambda t: handle(mon.on_tick(t['price'])))
+
+def handle(decision):
+    if decision.armed:
+        agartha.start()  # lanza el bot solo cuando ARMED
+```
+
+Cobertura: `tests/test_agartha_entry_filter.py` (8 casos, todos verdes).
+
+---
+
 ## Estudios realizados
 
 | Simbolo | Fecha | Best return | Best trailing | Notas |
@@ -180,5 +234,15 @@ Cobertura de tests: `tests/test_alpha_resolver.py` (regresion de cada regla).
 | **BSB** | 2026-05-24 | **+662.74 %** | **80.0 %** | Block Street (BSC, alphaId 790); 7837 velas (~81 d); mega pump; trailing **extremo alto** + breakeven 75% |
 | **UP** | 2026-05-24 | **+330.59 %** | **80.0 %** | Unitas (BSC, alphaId 804); 6969 velas (~72 d); pump grande; mismo perfil que BSB |
 | **SHARE** | 2026-05-24 | **-1.41 %** | 30.0 % | ShareX Token (BSC, alphaId 956); 1597 velas (~16 d); sin pump significativo |
+| **WMTX** | 2026-05-24 | **+34.22 %** | 10.0 % | WorldMobile (BSC); ~118 d; pump moderado |
+| **TRIA** | 2026-05-24 | **+262.24 %** | **5.0 %** | TRIA (BSC); ~110 d; pump grande; trailing 5% + activation 250% + breakeven 150% (extremo) |
+| **BASED** | 2026-05-24 | **+25.45 %** | 3.0 % | Based (BSC); ~55 d; pump moderado con perfil extremo |
+| **STABLE** | 2026-05-24 | **+113.88 %** | 5.0 % | Stable (BSC); ~107 d; pump grande capturado por trailing corto |
+| **ARTX** | 2026-05-24 | **-0.54 %** | 35.0 % | ARTX (BSC); ~117 d; sin pump |
+| **CYS** | 2026-05-24 | **+17.13 %** | 3.0 % | CYS (BSC); ~65 d; pump pequeño con perfil extremo |
+| **JCT** | 2026-05-24 | **+185.74 %** | **1.0 %** | JCT (BSC); ~109 d; pump grande; trailing ultra-corto + activation 250% + breakeven 75% |
+| **AIA** | 2026-05-24 | **+15.07 %** | 3.0 % | AIA (BSC); ~76 d; pump pequeño |
+| **EDGE** | 2026-05-24 | **+112.44 %** | **0.5 %** | EDGE (BSC); ~54 d; pump grande; trailing **MICRO** (0.5%) + activation 120% |
+| **COAI** | 2026-05-24 | **+34.34 %** | 8.0 % | COAI (BSC); ~104 d; pump moderado |
 
 (añadir filas conforme se evaluen nuevos simbolos)

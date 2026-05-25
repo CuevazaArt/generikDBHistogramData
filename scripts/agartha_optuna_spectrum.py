@@ -46,15 +46,18 @@ except ImportError:  # pragma: no cover
     plt = None
 
 
-# Discretizacion principal (saltos grandes) -- 10 x 5 x 4 = 200 combinaciones posibles
-NORMAL_TRAILING = [10.0, 15.0, 20.0, 25.0, 28.0, 30.0, 35.0, 40.0, 50.0, 60.0]
-NORMAL_ACTIVATION = [0.0, 10.0, 25.0, 50.0, 75.0]
-NORMAL_BREAKEVEN = [0.0, 10.0, 25.0, 50.0]
+# Discretizacion principal (saltos finos) -- 18 x 9 x 7 = 1134 combinaciones posibles
+NORMAL_TRAILING = [
+    8.0, 10.0, 12.0, 15.0, 18.0, 20.0, 22.0, 25.0, 28.0,
+    30.0, 33.0, 35.0, 38.0, 40.0, 45.0, 50.0, 55.0, 60.0,
+]
+NORMAL_ACTIVATION = [0.0, 5.0, 10.0, 20.0, 30.0, 40.0, 50.0, 65.0, 80.0]
+NORMAL_BREAKEVEN = [0.0, 5.0, 10.0, 20.0, 30.0, 40.0, 60.0]
 
 # Combinaciones ridiculas (extremos)
-EXTREME_TRAILING = [1.0, 3.0, 5.0, 75.0, 80.0, 90.0]
-EXTREME_ACTIVATION = [0.0, 100.0, 150.0, 200.0]
-EXTREME_BREAKEVEN = [0.0, 75.0, 100.0]
+EXTREME_TRAILING = [0.5, 1.0, 2.0, 3.0, 5.0, 70.0, 75.0, 80.0, 85.0, 90.0, 95.0]
+EXTREME_ACTIVATION = [0.0, 90.0, 100.0, 120.0, 150.0, 180.0, 200.0, 250.0]
+EXTREME_BREAKEVEN = [0.0, 70.0, 75.0, 85.0, 100.0, 125.0, 150.0]
 
 
 def _utc_iso() -> str:
