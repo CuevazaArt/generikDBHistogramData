@@ -103,38 +103,120 @@ def cmd_init_db(args: argparse.Namespace) -> int:
 
 
 def cmd_load_universe(args: argparse.Namespace) -> int:
-    src = Path(args.from_json) if args.from_json else None
-    if src is None or not src.exists():
+    if not args.from_json and not args.from_binance:
         print(
-            "Provide --from-json <path> with the Alpha token list "
-            "(produced by scripts/download_and_prepare_alpha.py or similar).",
+            "Provide --from-json <path> (offline) or --from-binance (live REST).",
             file=sys.stderr,
         )
         return 2
-    payload = json.loads(src.read_text(encoding="utf-8"))
-    if not isinstance(payload, list):
-        print("Expected a JSON array of token records.", file=sys.stderr)
-        return 2
+    if args.from_binance:
+        payload = _fetch_alpha_token_list_from_binance(
+            include_offline=args.include_offline,
+            include_offsell=args.include_offsell,
+        )
+        if args.export_json:
+            Path(args.export_json).parent.mkdir(parents=True, exist_ok=True)
+            Path(args.export_json).write_text(
+                json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+            print(f"Token list exported to {args.export_json}.")
+    else:
+        src = Path(args.from_json)
+        if not src.exists():
+            print(f"--from-json file not found: {src}", file=sys.stderr)
+            return 2
+        payload = json.loads(src.read_text(encoding="utf-8"))
+        if not isinstance(payload, list):
+            print("Expected a JSON array of token records.", file=sys.stderr)
+            return 2
+
+    if args.limit:
+        payload = payload[: int(args.limit)]
+
     db = ClusterDB(args.db)
     db.init_schema()
-    rows = [
-        {
-            "symbol": r["symbol"],
-            "alpha_id": r.get("alpha_id"),
-            "quote_asset": r.get("quote_asset"),
-            "listing_ts": r.get("listing_ts"),
-            "last_seen_ts": int(time.time() * 1000),
-            "status": r.get("status", "eligible"),
-            "holders": r.get("holders"),
-            "liquidity_usd": r.get("liquidity_usd"),
-            "metadata": r.get("metadata"),
-        }
-        for r in payload
-    ]
+    rows = [_normalise_universe_row(r) for r in payload]
+    rows = [r for r in rows if r is not None]
     n = db.upsert_universe(rows)
     db.close()
     print(f"Universe upsert: {n} rows.")
     return 0
+
+
+def _fetch_alpha_token_list_from_binance(
+    *,
+    include_offline: bool,
+    include_offsell: bool,
+) -> list[dict]:
+    """REST call to Alpha token list. Filters offline/offsell by default."""
+    from binance_hist_downloader import BinanceDownloader
+
+    dl = BinanceDownloader()
+    tokens = dl.get_alpha_token_list()
+    keep: list[dict] = []
+    for t in tokens:
+        if not include_offline and bool(t.get("offline", False)):
+            continue
+        if not include_offsell and bool(t.get("offsell", False)):
+            continue
+        keep.append(t)
+    print(
+        f"[load-universe] Binance Alpha token list: total={len(tokens)} "
+        f"kept_after_filter={len(keep)} "
+        f"(include_offline={include_offline}, include_offsell={include_offsell})"
+    )
+    return keep
+
+
+def _normalise_universe_row(token: dict) -> Optional[dict]:
+    """Map a token dict (from Binance or local JSON) to the universe row shape."""
+    sym = token.get("symbol") or token.get("baseAsset")
+    if not sym:
+        return None
+    sym = str(sym).upper()
+    alpha_id = token.get("alpha_id") or token.get("alphaId")
+    liquidity = token.get("liquidity_usd")
+    if liquidity is None:
+        liquidity = token.get("liquidity")
+    try:
+        liquidity = float(liquidity) if liquidity is not None else None
+    except (TypeError, ValueError):
+        liquidity = None
+    holders = token.get("holders")
+    try:
+        holders = int(holders) if holders is not None else None
+    except (TypeError, ValueError):
+        holders = None
+    metadata = token.get("metadata")
+    if metadata is None:
+        metadata = {
+            k: v
+            for k, v in token.items()
+            if k
+            not in {
+                "symbol",
+                "alphaId",
+                "alpha_id",
+                "liquidity",
+                "liquidity_usd",
+                "holders",
+                "status",
+                "quote_asset",
+                "listing_ts",
+                "metadata",
+            }
+        }
+    return {
+        "symbol": sym,
+        "alpha_id": alpha_id,
+        "quote_asset": token.get("quote_asset"),
+        "listing_ts": token.get("listing_ts") or token.get("listingTime"),
+        "last_seen_ts": int(time.time() * 1000),
+        "status": token.get("status", "eligible"),
+        "holders": holders,
+        "liquidity_usd": liquidity,
+        "metadata": metadata,
+    }
 
 
 def cmd_set_params(args: argparse.Namespace) -> int:
@@ -155,6 +237,136 @@ def cmd_set_params(args: argparse.Namespace) -> int:
     db.close()
     print(f"Stored params for {args.symbol}.")
     return 0
+
+
+def cmd_import_params(args: argparse.Namespace) -> int:
+    """Promote Optuna best_trial(s) into ``symbol_params``.
+
+    Three modes:
+      1. Single study: ``--symbol SYM --study NAME``.
+      2. Batch JSON: ``--batch-json path`` with
+         ``[{"symbol":"FOOUSDT","study":"agartha_foo_15m"}, ...]``.
+      3. ``--storage-path`` overrides the convention-resolved Optuna DB path.
+    """
+    items: list[tuple[str, str]] = []
+    if args.batch_json:
+        rows = json.loads(Path(args.batch_json).read_text(encoding="utf-8"))
+        for r in rows:
+            sym = r.get("symbol")
+            study = r.get("study")
+            if not sym or not study:
+                print(f"  SKIP malformed row: {r}", file=sys.stderr)
+                continue
+            items.append((str(sym).upper(), str(study)))
+    elif args.symbol and args.study:
+        items.append((args.symbol.upper(), args.study))
+    else:
+        print(
+            "Provide either --batch-json <file> or both --symbol and --study.",
+            file=sys.stderr,
+        )
+        return 2
+
+    db = ClusterDB(args.db)
+    db.init_schema()
+    ok = 0
+    fail = 0
+    for symbol, study in items:
+        try:
+            best = _load_best_params(
+                study=study,
+                root=args.root,
+                storage_path=args.storage_path,
+            )
+            db.upsert_universe([
+                {
+                    "symbol": symbol,
+                    "status": "eligible",
+                    "last_seen_ts": int(time.time() * 1000),
+                }
+            ])
+            sp = SymbolParams(
+                symbol=symbol,
+                trailing_stop_pct=float(best["trailing_stop_pct"]),
+                activation_profit_pct=float(best.get("activation_profit_pct", 0.0) or 0.0),
+                breakeven_lock_pct=float(best.get("breakeven_lock_pct", 0.0) or 0.0),
+                entry_limit_offset_pct=float(best.get("entry_limit_offset_pct", 0.0) or 0.0),
+                study_trial_id=(
+                    str(best.get("trial_number"))
+                    if best.get("trial_number") is not None
+                    else None
+                ),
+                study_equity_pct=(
+                    float(best.get("value")) if best.get("value") is not None else None
+                ),
+                optimized_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+                optuna_db_path=best.get("source"),
+            )
+            db.upsert_symbol_params(sp, raw_params=best)
+            ok += 1
+            print(
+                f"  OK   {symbol:<14} <- {study}  "
+                f"trail={sp.trailing_stop_pct} act={sp.activation_profit_pct} "
+                f"be={sp.breakeven_lock_pct} off={sp.entry_limit_offset_pct} "
+                f"value={best.get('value')}"
+            )
+        except Exception as e:  # noqa: BLE001
+            print(f"  FAIL {symbol:<14} <- {study}  ({e})", file=sys.stderr)
+            fail += 1
+
+    db.close()
+    print(f"Imported params: ok={ok} fail={fail} total={len(items)}")
+    return 0 if fail == 0 else 1
+
+
+def _load_best_params(
+    *,
+    study: str,
+    root: str,
+    storage_path: Optional[str],
+) -> dict:
+    """Return best_params dict.
+
+    Resolution order:
+      1. ``storage_path`` if given and exists -> Optuna load_study.
+      2. Convention path ``<root>/entregables/studies/<study>/optuna.db`` -> Optuna.
+      3. Sibling ``trial_to_run.json`` -> read ``best_params`` directly (no optuna dep).
+    """
+    candidate_paths: list[Path] = []
+    if storage_path:
+        candidate_paths.append(Path(storage_path))
+    candidate_paths.append(Path(root) / "entregables" / "studies" / study / "optuna.db")
+
+    for db_path in candidate_paths:
+        if db_path.exists():
+            try:
+                import optuna  # type: ignore[import-untyped]
+            except ImportError:
+                break
+            storage_url = f"sqlite:///{db_path.resolve().as_posix()}"
+            st = optuna.load_study(study_name=study, storage=storage_url)
+            return {
+                **st.best_params,
+                "trial_number": st.best_trial.number,
+                "value": float(st.best_value),
+                "source": str(db_path),
+            }
+
+    for db_path in candidate_paths:
+        json_path = db_path.parent / "trial_to_run.json"
+        if json_path.exists():
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+            return {
+                **(data.get("best_params") or {}),
+                "trial_number": data.get("best_trial_number"),
+                "value": data.get("best_value"),
+                "source": str(json_path),
+            }
+
+    raise FileNotFoundError(
+        f"No optuna.db or trial_to_run.json found for study '{study}' "
+        f"(checked: {[str(p) for p in candidate_paths]})"
+    )
 
 
 def cmd_schedule_batch(args: argparse.Namespace) -> int:
@@ -305,9 +517,61 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("init-db", help="Apply DB migrations.")
     sp.set_defaults(func=cmd_init_db)
 
-    sp = sub.add_parser("load-universe", help="Upsert symbols from a JSON file.")
-    sp.add_argument("--from-json", required=True, help="Path to JSON array of token records.")
+    sp = sub.add_parser(
+        "load-universe",
+        help="Upsert symbols from a JSON file or live Binance Alpha REST call.",
+    )
+    grp = sp.add_mutually_exclusive_group(required=True)
+    grp.add_argument("--from-json", help="Path to JSON array of token records.")
+    grp.add_argument(
+        "--from-binance",
+        action="store_true",
+        help="Call Binance Alpha token list endpoint directly.",
+    )
+    sp.add_argument(
+        "--include-offline",
+        action="store_true",
+        help="Keep tokens flagged offline (default: drop them).",
+    )
+    sp.add_argument(
+        "--include-offsell",
+        action="store_true",
+        help="Keep tokens flagged offsell (default: drop them).",
+    )
+    sp.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="Limit the number of rows upserted (0 = no limit).",
+    )
+    sp.add_argument(
+        "--export-json",
+        default=None,
+        help="When using --from-binance, also save the raw token list to this path.",
+    )
     sp.set_defaults(func=cmd_load_universe)
+
+    sp = sub.add_parser(
+        "import-params",
+        help="Promote Optuna best_trial into symbol_params (single or batch).",
+    )
+    sp.add_argument("--symbol", help="Single import: target symbol.")
+    sp.add_argument("--study", help="Single import: Optuna study name.")
+    sp.add_argument(
+        "--batch-json",
+        help='Batch import: JSON list of {"symbol": "...", "study": "..."}.',
+    )
+    sp.add_argument(
+        "--root",
+        default="reports",
+        help="Reports root used to resolve <root>/entregables/studies/<study>/optuna.db.",
+    )
+    sp.add_argument(
+        "--storage-path",
+        default=None,
+        help="Override path to the Optuna SQLite file (skips convention resolution).",
+    )
+    sp.set_defaults(func=cmd_import_params)
 
     sp = sub.add_parser("set-params", help="Manually store best params for a symbol.")
     sp.add_argument("symbol")

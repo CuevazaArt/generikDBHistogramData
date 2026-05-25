@@ -133,9 +133,49 @@ Costo estimado: 1–2 días de implementación + harness con testnet Binance.
 - **Alertas externas** (Telegram/Slack): hoy se loggean en `event_log` con `level=critical`. Un sidecar opcional puede leerlos y notificar.
 
 ### 4.3 Mejoras incrementales (no bloqueantes)
-- Wrapper para promover `best_trial` de Optuna → `set-params` en batch (hoy es manual por símbolo).
+- ~~Wrapper para promover `best_trial` de Optuna → `set-params` en batch~~
+  **Resuelto** (v0.1.1): `cli import-params --batch-json` o
+  `--symbol/--study` lee el `best_trial` de Optuna SQLite o del fallback
+  `trial_to_run.json` y upserta en bloque. Auto-bootstrap del row de
+  `alpha_universe` para satisfacer la FK.
+- ~~`load-universe` requiere JSON previo~~ **Resuelto** (v0.1.1): `cli
+  load-universe --from-binance` llama directo al endpoint Alpha y filtra
+  `offline`/`offsell` por default. `--export-json` permite guardar el
+  payload crudo para auditoría.
 - Re-optimización rolling automatizada (cron). El state machine ya soporta `optimizing` para un bot ya desplegado; falta el scheduler periódico.
 - `--detach` para el `live-up` (envoltura systemd/NSSM externa funciona ya).
+
+---
+
+## 7. Cambios v0.1.1 (2026-05-25, sesión continuación)
+
+### 7.1 `cli load-universe --from-binance`
+Refactor de `cmd_load_universe`:
+- `--from-json` y `--from-binance` mutuamente excluyentes.
+- `_fetch_alpha_token_list_from_binance(...)` filtra `offline`/`offsell` (override con flags).
+- Helper `_normalise_universe_row(...)` acepta indistintamente
+  `liquidity` / `liquidity_usd`, `alphaId` / `alpha_id`, etc.
+- `--limit N` para upserts acotados; `--export-json` para snapshot crudo.
+
+### 7.2 `cli import-params` (nuevo subcomando)
+Tres modos:
+- `--symbol X --study Y` (single).
+- `--batch-json file.json` con lista `[{"symbol":..., "study":...}, ...]`.
+- `--storage-path path/to/optuna.db` para override del path convención.
+
+Resolución del best_trial:
+1. Optuna SQLite (`<root>/entregables/studies/<study>/optuna.db`).
+2. Fallback a `trial_to_run.json` cuando Optuna no está disponible o el path no existe.
+3. Auto-upsert mínimo de `alpha_universe` (status=`eligible`) para FK.
+
+### 7.3 Tests añadidos (10 nuevos, suite cluster pasa de 27 → 37)
+`tests/test_agartha_cluster_cli_extras.py`:
+- `load-universe --from-binance` con filtros, includes, `--limit`, `--export-json`.
+- `load-universe --from-json` con normalización de campos.
+- `import-params` single via Optuna real.
+- `import-params` batch via Optuna real.
+- `import-params` fallback a `trial_to_run.json`.
+- Errores con mensajes claros (símbolo+estudio faltantes, study inexistente).
 
 ---
 

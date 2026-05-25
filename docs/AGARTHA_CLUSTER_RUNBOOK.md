@@ -108,7 +108,20 @@ python scripts/agartha_cluster_cli.py creds check --profile default
 
 El cluster necesita la lista de símbolos elegibles. Hay dos opciones:
 
-**(a) Desde un JSON producido por una descarga previa:**
+**(a) Directo desde Binance Alpha (recomendado):**
+
+```powershell
+python scripts/agartha_cluster_cli.py load-universe --from-binance
+```
+
+Llama `GET /bapi/.../alpha/all/token/list` y filtra `offline`/`offsell`
+por default. Flags útiles:
+- `--include-offline` / `--include-offsell`: no filtrar (debug).
+- `--limit N`: solo upsertar los primeros N (sanity check).
+- `--export-json data/alpha_universe.json`: guardar también el payload
+  crudo para auditoría / re-import offline.
+
+**(b) Desde un JSON previamente descargado:**
 
 ```powershell
 python scripts/agartha_cluster_cli.py load-universe --from-json data/alpha_universe.json
@@ -124,11 +137,8 @@ Formato esperado (array de objetos):
 ]
 ```
 
-**(b) Generar el JSON desde Binance** ejecutando una vez
-`scripts/download_and_prepare_alpha.py --list-only` (si el flag existe en
-tu versión) o usando un script ad-hoc que llame
-`BinanceDownloader.get_alpha_token_list()`. La salida se filtra a
-`status='eligible'` (excluye `offline`/`offsell`) y se guarda como JSON.
+Los campos `liquidity` y `liquidity_usd` son aceptados indistintamente; el
+CLI los normaliza al schema interno.
 
 Verificar:
 ```powershell
@@ -173,20 +183,51 @@ con los parámetros óptimos (`trailing_stop_pct`, `activation_profit_pct`,
 
 ### 2.3 Promover los parámetros al cluster
 
-Cuando el operador valida el resultado, los inscribe en `cluster.db` con:
+**Opción A — Importar directamente el `best_trial` de Optuna (recomendado):**
+
+```powershell
+# Un solo símbolo
+python scripts/agartha_cluster_cli.py import-params `
+  --symbol FOOUSDT --study agartha_FOOUSDT_15m --root reports
+```
+
+Lee el mejor trial del estudio Optuna (resuelve
+`<root>/entregables/studies/<study>/optuna.db` por convención) y upserta
+a `symbol_params` con los 4 parámetros y la trazabilidad
+(`study_trial_id`, `study_equity_pct`, `optuna_db_path`,
+`optimized_at`). Si la fila de `alpha_universe` no existe aún para ese
+símbolo, se crea con status `eligible` automáticamente (FK satisfecha).
+
+Para promover **N estudios en batch**:
+
+```powershell
+python scripts/agartha_cluster_cli.py import-params `
+  --batch-json data/optuna_promotions.json --root reports
+```
+
+Con `data/optuna_promotions.json`:
+```json
+[
+  {"symbol": "FOOUSDT", "study": "agartha_FOOUSDT_15m"},
+  {"symbol": "BARUSDT", "study": "agartha_BARUSDT_15m"},
+  ...
+]
+```
+
+Si `optuna.db` no se encuentra en el path convención, el CLI cae a
+`trial_to_run.json` (mismo directorio del estudio); útil cuando el
+estudio fue movido o `optuna` no está instalado en el host del cluster.
+
+**Opción B — Set manual (ad-hoc, debugging):**
 
 ```powershell
 python scripts/agartha_cluster_cli.py set-params FOOUSDT `
   --trailing 25.0 --activation 0.0 --breakeven 0.0 --entry-offset 0.0
 ```
 
-Esto upserta una fila en `symbol_params`. Sin esta fila el scheduler
-**rechaza el deploy** del símbolo con `reason=no_params; run optimizer first`.
-
-> **Tip:** Mientras no haya un comando automático que importe el
-> `best_trial` directamente, se puede escribir un pequeño wrapper sobre
-> `cluster_db.upsert_symbol_params(SymbolParams(...))` para promover
-> varios símbolos en batch.
+Cualquiera de las dos rutas termina en una fila de `symbol_params`. Sin
+esa fila el scheduler **rechaza el deploy** del símbolo con
+`reason=no_params; run optimizer first`.
 
 ---
 
@@ -405,10 +446,11 @@ acotado.
 [ ] F1  cli init-db
 [ ] F1  cli creds set --profile default
 [ ] F1  cli creds check
-[ ] F1  cli load-universe --from-json data/alpha_universe.json
+[ ] F1  cli load-universe --from-binance  (o --from-json)
 [ ] F2  download_and_prepare_alpha.py por símbolo
 [ ] F2  agartha_optuna_spectrum.py por símbolo
-[ ] F2  cli set-params <symbol> --trailing X --... por símbolo
+[ ] F2  cli import-params --batch-json data/optuna_promotions.json
+        (o set-params manual por símbolo)
 [ ] F3  python scripts/agartha_cluster_smoke.py  (exit 0)
 [ ] F3  cli live-up --dry-run --ticks 20
 [ ] F4  cli schedule-batch --limit 5  (batch pequeño primero)
