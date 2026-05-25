@@ -289,6 +289,86 @@ sin-pump pasaron de negativos a positivos al permitir LIMIT profundas.
 
 ---
 
+## Validacion masiva con n=170 + walk-forward (2026-05-25)
+
+### Batch paralelo de 111 symbols nuevos
+
+Lanzado con `scripts/agartha_batch_parallel.py` usando **6 workers**
+ProcessPoolExecutor + SQLite WAL mode habilitado:
+
+- **111/111 OK en 22.8 min** (vs ~55 min secuencial = **2.4x speedup**)
+- Tasa de exito acumulada n=170: **141 positivos (83%)**, avg return **+263 %**
+- Nuevo record absoluto: **M +6810 %** (×68 sobre 10 USDT)
+- Otros top: RAVE +4044 %, LAB +2928 %, BOB +1945 %, BAS +1718 %, RIVER +1264 %, BSB +919 %, FOREST +718 %
+
+### Walk-forward sobre top 30 winners (out-of-sample)
+
+Split 70% train / 30% test con `scripts/agartha_walkforward.py`, 6 workers paralelos.
+**Tiempo total: 5.5 min para 30 walk-forwards** (Optuna + OOS backtest cada uno).
+
+**Estadisticas:**
+
+| Metrica | Valor |
+|---|---:|
+| Train positivos | 30/30 (100%) |
+| **Test positivos** | **12/30 (40%)** |
+| Train+/Test+ (generaliza) | 12/30 (40%) |
+| Train+/Test- (overfit real) | **5/30 (17%)** |
+| Train+/Test=0 (LIMIT no filleo OOS) | **13/30 (43%)** |
+| Avg train return | +586.5 % |
+| **Avg test return** | **+68.3 %** (sigue positivo en agregado) |
+| Decay (test - train) | −518 pp (88% del retorno se evapora OOS) |
+
+**Top OOS winners** (capturaron pumps en datos no vistos):
+
+| Symbol | Train | **Test OOS** | Lectura |
+|---|---:|---:|---|
+| **RAVE** | +220% | **+960%** | OOS mejor que train (otro pump en test) |
+| **FOREST** | +38% | **+549%** | El pump esta enteramente en OOS |
+| BAS | +1516% | +217% | Decay grande pero buen win |
+| LAB | +1388% | +98% | Generaliza |
+| BSB | +434% | +86% | Generaliza |
+| UP | +242% | +63% | Generaliza |
+
+**Worst OOS overfits** (positivos en train, perdedores en test):
+
+| Symbol | Train | Test OOS | Comentario |
+|---|---:|---:|---|
+| RIVER | +1312% | −44% | Pump unico en train, no se repite |
+| BILL | +513% | −32% | OOS muy corto (1961 bars) |
+| BOB | +1947% | −8% | Decay extremo |
+| LIGHT | +575% | −3% | Marginal |
+| ARIA | +320% | −1.5% | Marginal |
+
+**Hallazgo importante: 13/30 (43%) OOS = +0.00 %**.
+Esto ocurre cuando `entry_limit_offset_pct` train fue 35-80 % (encajaba un dip
+profundo del pasado) y en test el precio no cayo tanto, **la LIMIT nunca fillea**
+y el bot queda en cash → return 0 %. No es perdida, es **opportunity cost**.
+Symbols con offset >50 son los mas vulnerables a este artefacto.
+
+### Veredicto walk-forward
+
+1. **La estrategia SI generaliza en agregado** (avg test +68 %).
+2. **Hay overfit medible** (decay -88 %, solo 40 % de winners reales OOS).
+3. **17 % overfit destructivo** (pierdes dinero) — limitado y small magnitude.
+4. **43 % no opera por LIMIT no filleable en OOS** — argumenta a favor de
+   `entry_limit_offset_pct` modesto (0-15 %) como default, dejando offsets
+   grandes (>=35 %) solo cuando train muestra alta tasa de fills.
+5. **El sesgo de seleccion explica el decay**: Optuna en train encuentra el
+   trial que capturo el unico pump del period. En test puede no haber pump
+   o el pump tener otra forma. La asimetria pump-or-bust es REAL pero
+   inestable temporalmente.
+
+**Recomendacion para deploy**:
+- Si solo desplegas top-10 in-sample winners con sus best params -> ~40 %
+  generara dinero OOS, 17 % perdera (poco), 43 % no operara.
+- Cartera de N=50+ instancias amortiza esta dispersion gracias al downside
+  acotado (peor caso ~-7 %) y upside abierto (RAVE OOS +960 %).
+- **Re-optimizar periodicamente** (semanal/quincenal) para incorporar nuevos
+  pumps y descartar params obsoletos.
+
+---
+
 ## Validacion bimodal con n=75 symbols (2026-05-25)
 
 Batch de 55 symbols nuevos lanzado con el espacio Optuna **restringido al
