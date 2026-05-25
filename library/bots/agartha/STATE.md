@@ -1,6 +1,34 @@
-# Estado Agartha — sesion en curso
+# Estado Agartha — handoff entre sesiones
 
-Actualizado: 2026-05-24 16:30 UTC
+Actualizado: 2026-05-25 07:42 UTC (cierre de sesion intensiva)
+
+## Resumen de la sesion 2026-05-24
+
+Desarrollo completo del bot Agartha desde scaffold hasta universo Alpha
+cubierto. 18 tags, ~12 horas de trabajo. Estado: **listo para connector live**.
+
+### Hitos
+- Strategy `AgarthaStrategy` + accesorios (trailing/breakeven/partial/LIMIT entry)
+- Pipeline canonico Alpha (`scripts/agartha_alpha_study.py`)
+- Optuna spectrum bimodal con extremos
+- Paralelizacion 10 workers (3x speedup)
+- Walk-forward validation (40 % generaliza OOS)
+- **n=386 symbols evaluados** (77 % positivos, top M +6810 %)
+- 8 reglas arbitrarias documentadas + tests de regresion
+- 1 bug critico cazado y corregido (prefix collision)
+
+### Para arrancar manana
+
+1. **Revisar este STATE.md y `library/bots/agartha/ALPHA_STUDY_MODEL.md`**.
+2. **Siguientes pasos candidatos** (no priorizados):
+   - Connector live REST/WS Alpha (toolkit listo, pendiente la pieza de red)
+   - Dashboard de cartera (visualizar las 28 mega-winners con sus seteos)
+   - Re-validar walk-forward con n=386 (mas robusto que n=30)
+   - Re-optimizacion rolling (semanal, automatica)
+   - Sistema de monitoreo + alertas en vivo (telegram/email)
+3. `git log` muestra 18 tags secuenciales del progreso.
+
+### Originalmente (sesion previa)
 
 ## Hecho hoy
 
