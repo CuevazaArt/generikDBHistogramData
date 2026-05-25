@@ -1182,6 +1182,12 @@ def main() -> None:
                        help="Agartha: tope de ciclos compra-venta (0=ilimitado, 1=single-shot).")
     p_run.add_argument("--reentry_cooldown_bars", type=int, default=0,
                        help="Agartha: barras a esperar tras cerrar antes de re-entrar (0=inmediato).")
+    p_run.add_argument("--entry_limit_offset_pct", type=float, default=0.0,
+                       help="Agartha: colocar BUY LIMIT a X%% debajo del precio actual (0=compra inmediata).")
+    p_run.add_argument("--entry_limit_expiry_bars", type=int, default=0,
+                       help="Agartha: barras antes de expirar la LIMIT pendiente (0=GTC sin expiracion).")
+    p_run.add_argument("--entry_limit_reprice_on_expiry", action="store_true",
+                       help="Agartha: tras expirar la LIMIT, re-cotizar al nuevo precio (default: cancelar y esperar).")
     # --- Fase 2: checkpoint flags (only on p_run; other subparsers untouched) ---
     p_run.add_argument("--checkpoint_every_bars", type=int, default=None)
     p_run.add_argument("--checkpoint_every_sim_seconds", type=int, default=None)
@@ -1217,6 +1223,9 @@ def main() -> None:
     p_opt.add_argument("--partial_tp_size_pct", type=float, default=0.0)
     p_opt.add_argument("--max_cycles", type=int, default=0)
     p_opt.add_argument("--reentry_cooldown_bars", type=int, default=0)
+    p_opt.add_argument("--entry_limit_offset_pct", type=float, default=0.0)
+    p_opt.add_argument("--entry_limit_expiry_bars", type=int, default=0)
+    p_opt.add_argument("--entry_limit_reprice_on_expiry", action="store_true")
     p_opt.add_argument(
         "--executor",
         choices=["ray", "joblib", "serial"],

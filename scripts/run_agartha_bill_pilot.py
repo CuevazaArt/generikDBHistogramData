@@ -186,6 +186,11 @@ def main() -> int:
     parser.add_argument("--max_cycles", type=int, default=0,
                         help="0=ilimitado (default, ciclo continuo); 1=single-shot.")
     parser.add_argument("--reentry_cooldown_bars", type=int, default=0)
+    parser.add_argument("--entry_limit_offset_pct", type=float, default=0.0,
+                        help="LIMIT BUY a X%% debajo del precio actual; 0=compra inmediata.")
+    parser.add_argument("--entry_limit_expiry_bars", type=int, default=0,
+                        help="Barras antes de expirar la LIMIT pendiente (0=GTC).")
+    parser.add_argument("--entry_limit_reprice_on_expiry", action="store_true")
     parser.add_argument("--fee_rate", type=float, default=0.001)
     parser.add_argument("--slippage_bps", type=float, default=10.0,
                         help="Alpha tokens: slippage mas alto que spot maduro.")
@@ -203,6 +208,9 @@ def main() -> int:
         "partial_tp_size_pct": float(args.partial_tp_size_pct),
         "max_cycles": int(args.max_cycles),
         "reentry_cooldown_bars": int(args.reentry_cooldown_bars),
+        "entry_limit_offset_pct": float(args.entry_limit_offset_pct),
+        "entry_limit_expiry_bars": int(args.entry_limit_expiry_bars),
+        "entry_limit_reprice_on_expiry": bool(args.entry_limit_reprice_on_expiry),
     }
     cfg = EngineConfig(
         db_path=args.db,

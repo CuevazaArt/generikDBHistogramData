@@ -818,6 +818,9 @@ class AgarthaStrategy(StrategyBase):
         partial_tp_size_pct: float = 0.0,
         max_cycles: int = 0,
         reentry_cooldown_bars: int = 0,
+        entry_limit_offset_pct: float = 0.0,
+        entry_limit_expiry_bars: int = 0,
+        entry_limit_reprice_on_expiry: bool = False,
         **params,
     ):
         super().__init__(
@@ -830,6 +833,9 @@ class AgarthaStrategy(StrategyBase):
             partial_tp_size_pct=partial_tp_size_pct,
             max_cycles=max_cycles,
             reentry_cooldown_bars=reentry_cooldown_bars,
+            entry_limit_offset_pct=entry_limit_offset_pct,
+            entry_limit_expiry_bars=entry_limit_expiry_bars,
+            entry_limit_reprice_on_expiry=entry_limit_reprice_on_expiry,
             **params,
         )
         self.quote_order_qty_usdt = max(0.1, float(quote_order_qty_usdt))
@@ -841,6 +847,10 @@ class AgarthaStrategy(StrategyBase):
         self.partial_tp_size_pct = max(0.0, min(1.0, float(partial_tp_size_pct)))
         self.max_cycles = max(0, int(max_cycles))  # 0 = ilimitado
         self.reentry_cooldown_bars = max(0, int(reentry_cooldown_bars))
+        # Accesorio de entrada por LIMIT: 0 = compra inmediata (legacy).
+        self.entry_limit_offset_pct = max(0.0, float(entry_limit_offset_pct))
+        self.entry_limit_expiry_bars = max(0, int(entry_limit_expiry_bars))
+        self.entry_limit_reprice_on_expiry = bool(entry_limit_reprice_on_expiry)
         # Estado serializable
         self.entry_price: float = 0.0
         self.peak_price: float = 0.0
@@ -849,6 +859,9 @@ class AgarthaStrategy(StrategyBase):
         self.partial_tp_done: bool = False
         self.cycles_closed: int = 0
         self.bars_since_last_close: int = 0
+        # LIMIT-de-entrada pendiente (None = no hay limit colocada).
+        self.pending_limit_price: float = 0.0
+        self.bars_since_limit_placed: int = 0
 
     def _reset_position_state(self) -> None:
         self.entry_price = 0.0
@@ -856,6 +869,8 @@ class AgarthaStrategy(StrategyBase):
         self.bars_in_position = 0
         self.trailing_active = False
         self.partial_tp_done = False
+        self.pending_limit_price = 0.0
+        self.bars_since_limit_placed = 0
 
     def on_bar(self, ctx: StrategyContext) -> Signal:
         price = float(ctx.candle.get("price_source", ctx.candle["close"]))
@@ -882,6 +897,67 @@ class AgarthaStrategy(StrategyBase):
             if ctx.cash < self.quote_order_qty_usdt:
                 return Signal(action="hold", reason="insufficient_cash")
             size_pct = max(0.01, min(1.0, self.quote_order_qty_usdt / max(ctx.cash, 1e-9)))
+
+            # --- Accesorio: orden LIMIT pre-colocada ---
+            if self.entry_limit_offset_pct > 0:
+                bar_low = float(ctx.candle.get("low", price))
+                # Si no hay limit pendiente: "colocarla" referida al precio actual.
+                if self.pending_limit_price <= 0:
+                    self.pending_limit_price = price * (1.0 - self.entry_limit_offset_pct / 100.0)
+                    self.bars_since_limit_placed = 0
+                    return Signal(
+                        action="hold",
+                        reason="agartha_limit_placed",
+                        metadata={
+                            "limit_price": self.pending_limit_price,
+                            "reference_price": price,
+                            "offset_pct": self.entry_limit_offset_pct,
+                        },
+                    )
+                # Fill simulado: si el low de la vela tocó la limit, compramos al limit_price.
+                if bar_low <= self.pending_limit_price:
+                    limit_fill = self.pending_limit_price
+                    self.pending_limit_price = 0.0
+                    self.bars_since_limit_placed = 0
+                    reason = "agartha_limit_fill_initial" if self.cycles_closed == 0 else "agartha_limit_fill_reentry"
+                    return Signal(
+                        action="buy",
+                        size_pct=size_pct,
+                        reason=reason,
+                        metadata={
+                            "target_notional": self.quote_order_qty_usdt,
+                            "cycle_index": self.cycles_closed,
+                            "limit_fill_price": limit_fill,
+                            "bar_low": bar_low,
+                        },
+                    )
+                # Sin fill: incrementar contador y eventualmente expirar/re-cotizar.
+                self.bars_since_limit_placed += 1
+                if self.entry_limit_expiry_bars > 0 and self.bars_since_limit_placed >= self.entry_limit_expiry_bars:
+                    if self.entry_limit_reprice_on_expiry:
+                        old_limit = self.pending_limit_price
+                        self.pending_limit_price = price * (1.0 - self.entry_limit_offset_pct / 100.0)
+                        self.bars_since_limit_placed = 0
+                        return Signal(
+                            action="hold",
+                            reason="agartha_limit_repriced",
+                            metadata={
+                                "old_limit": old_limit,
+                                "new_limit": self.pending_limit_price,
+                                "reference_price": price,
+                            },
+                        )
+                    else:
+                        # Cancelar y abandonar (esperar siguiente ciclo).
+                        self.pending_limit_price = 0.0
+                        self.bars_since_limit_placed = 0
+                        return Signal(
+                            action="hold",
+                            reason="agartha_limit_expired_no_fill",
+                        )
+                return Signal(action="hold", reason="agartha_limit_pending")
+
+            # Sin accesorio LIMIT: comportamiento legacy (compra inmediata).
             reason = "agartha_initial_entry" if self.cycles_closed == 0 else "agartha_reentry"
             return Signal(
                 action="buy",
@@ -985,6 +1061,8 @@ class AgarthaStrategy(StrategyBase):
             "partial_tp_done": bool(self.partial_tp_done),
             "cycles_closed": int(self.cycles_closed),
             "bars_since_last_close": int(self.bars_since_last_close),
+            "pending_limit_price": float(self.pending_limit_price),
+            "bars_since_limit_placed": int(self.bars_since_limit_placed),
         }
 
     def import_state(self, state: dict) -> None:
@@ -997,3 +1075,5 @@ class AgarthaStrategy(StrategyBase):
         self.partial_tp_done = bool(state.get("partial_tp_done", False))
         self.cycles_closed = int(state.get("cycles_closed", 0) or 0)
         self.bars_since_last_close = int(state.get("bars_since_last_close", 0) or 0)
+        self.pending_limit_price = float(state.get("pending_limit_price", 0.0) or 0.0)
+        self.bars_since_limit_placed = int(state.get("bars_since_limit_placed", 0) or 0)

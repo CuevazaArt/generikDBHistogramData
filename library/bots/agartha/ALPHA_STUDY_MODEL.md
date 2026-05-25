@@ -166,7 +166,57 @@ Cobertura de tests: `tests/test_alpha_resolver.py` (regresion de cada regla).
 
 ---
 
-## Accesorio: Entry Gate (`backtest/agartha_entry_filter.py`)
+## Accesorio: Entry-LIMIT pre-colocada (recomendado para Alpha)
+
+Encaje natural con la naturaleza de Alpha: **dejas que el "cuchillo cayendo"
+caiga** y un orden LIMIT en el orderbook te llena al precio favorable sin
+necesitar monitoreo activo. Server-side, cero compute, escala a N instancias.
+
+### Parametros (en `AgarthaStrategy`)
+
+| Parametro | Default | Rol |
+|---|---:|---|
+| `entry_limit_offset_pct` | 0.0 | % debajo del precio activo. **0 = comportamiento legacy** (compra inmediata). >0 = coloca LIMIT a `precio * (1 - X/100)`. |
+| `entry_limit_expiry_bars` | 0 | Barras antes de cancelar/re-evaluar la LIMIT pendiente. 0 = GTC sin expiracion. |
+| `entry_limit_reprice_on_expiry` | False | Tras expirar: re-cotizar al nuevo precio (True) o cancelar y esperar el proximo ciclo (False). |
+
+### Mecanica backtest
+
+- Primer bar sin posicion -> "coloca" la LIMIT en `pending_limit_price`.
+- Cada bar siguiente: si `low <= pending_limit_price`, simula fill al limit_price.
+- Si pasan `entry_limit_expiry_bars` sin fill, cancela (o re-cotiza).
+
+### Mecanica live
+
+1. Al activar el bot: leer `@ticker` para precio actual.
+2. Calcular `limit_price = current * (1 - offset/100)`.
+3. Validar que `limit_price` este dentro de banda `PERCENT_PRICE_BY_SIDE`
+   (ver `agartha_exit_planner.compute_sell_band` extendido a buys).
+4. POST LIMIT GTC.
+5. Esperar fill via `userDataStream`; cuando entra, arranca la logica trailing.
+6. Si no fillea en N horas, cancelar y decidir (reprice / abandonar).
+
+### Por que es superior al Entry Gate WS-driven en Alpha
+
+| Dimension | Entry Gate WS (3 capas) | **LIMIT pre-colocada** |
+|---|---|---|
+| Filosofia | Detecto el momento y compro market | **Declaro precio favorable, el mercado viene a mi** |
+| Carga compute | Tick monitor per simbolo | **0 (orden vive en el exchange)** |
+| Escala a 50 instancias | 50 WS + 50 deques + 50 evals/tick | **50 LIMITs estaticas en el book** |
+| Cuchillos cayendo | Bloquea (Layer 3 momentum) | **Te llenan al precio que tu elegiste** |
+| Coherente con LIMIT-only de Alpha | No (emula market con LIMIT agresiva) | **Si (LIMIT es el unico tipo soportado)** |
+| Risk si bot cae | Pierdes oportunidad | **LIMIT sigue activa hasta cancelacion** |
+
+**Recomendacion**: para deployment Alpha, **usar `entry_limit_offset_pct > 0`**
+y mantener el Entry Gate WS solo como herramienta de analisis/screening.
+
+Cobertura: `tests/test_agartha.py` (6 casos del accesorio LIMIT) + el Entry
+Gate WS se conserva en `backtest/agartha_entry_filter.py` para usos no
+operacionales (research, dashboards).
+
+---
+
+## Accesorio (alternativo): Entry Gate WS (`backtest/agartha_entry_filter.py`)
 
 Modulo opcional para identificar el **momento favorable de armado** del bot
 (en lugar de comprar "al activar"). Diseñado para uso live (WS-driven via

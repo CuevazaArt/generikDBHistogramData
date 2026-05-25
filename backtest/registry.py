@@ -152,6 +152,9 @@ def params_from_cli(args: Any, strategy_name: str) -> Dict[str, Any]:
             "partial_tp_size_pct": float(getattr(args, "partial_tp_size_pct", 0.0)),
             "max_cycles": int(getattr(args, "max_cycles", 0)),
             "reentry_cooldown_bars": int(getattr(args, "reentry_cooldown_bars", 0)),
+            "entry_limit_offset_pct": float(getattr(args, "entry_limit_offset_pct", 0.0)),
+            "entry_limit_expiry_bars": int(getattr(args, "entry_limit_expiry_bars", 0)),
+            "entry_limit_reprice_on_expiry": bool(getattr(args, "entry_limit_reprice_on_expiry", False)),
         }
     return {
         "fast": int(args.fast),

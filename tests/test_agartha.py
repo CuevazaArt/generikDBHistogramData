@@ -6,8 +6,9 @@ from backtest.strategies import AgarthaStrategy
 from backtest.strategy_base import StrategyContext
 
 
-def _ctx(price: float, cash: float, position_qty: float, avg_entry: float, candles=None):
-    candle = {"open": price, "high": price, "low": price, "close": price, "price_source": price}
+def _ctx(price: float, cash: float, position_qty: float, avg_entry: float, candles=None, *, low=None):
+    bar_low = float(low) if low is not None else price
+    candle = {"open": price, "high": price, "low": bar_low, "close": price, "price_source": price}
     candles = candles or [candle]
     return StrategyContext(
         index=len(candles) - 1,
@@ -221,6 +222,71 @@ def test_params_from_cli_agartha_contains_required_keys():
     assert out["breakeven_lock_pct"] == 100.0
     assert out["max_cycles"] == 0
     assert out["reentry_cooldown_bars"] == 4
+
+
+def test_agartha_entry_limit_places_pending_order_on_first_bar():
+    strat = AgarthaStrategy(quote_order_qty_usdt=10.0, trailing_stop_pct=30.0,
+                            entry_limit_offset_pct=10.0)
+    sig = strat.on_bar(_ctx(price=1.0, cash=100.0, position_qty=0.0, avg_entry=0.0))
+    assert sig.action == "hold"
+    assert sig.reason == "agartha_limit_placed"
+    assert sig.metadata["limit_price"] == pytest.approx(0.9)
+    assert strat.pending_limit_price == pytest.approx(0.9)
+
+
+def test_agartha_entry_limit_fills_when_low_touches_price():
+    strat = AgarthaStrategy(quote_order_qty_usdt=10.0, trailing_stop_pct=30.0,
+                            entry_limit_offset_pct=10.0)
+    strat.on_bar(_ctx(price=1.0, cash=100.0, position_qty=0.0, avg_entry=0.0))
+    # En el siguiente bar, el low baja a 0.85 (cruza la limit a 0.9) -> fill
+    sig = strat.on_bar(_ctx(price=0.95, cash=100.0, position_qty=0.0, avg_entry=0.0, low=0.85))
+    assert sig.action == "buy"
+    assert sig.reason == "agartha_limit_fill_initial"
+    assert sig.metadata["limit_fill_price"] == pytest.approx(0.9)
+    assert strat.pending_limit_price == 0.0
+
+
+def test_agartha_entry_limit_does_not_fill_when_low_above_limit():
+    strat = AgarthaStrategy(quote_order_qty_usdt=10.0, trailing_stop_pct=30.0,
+                            entry_limit_offset_pct=10.0)
+    strat.on_bar(_ctx(price=1.0, cash=100.0, position_qty=0.0, avg_entry=0.0))
+    sig = strat.on_bar(_ctx(price=1.05, cash=100.0, position_qty=0.0, avg_entry=0.0, low=0.95))
+    assert sig.action == "hold"
+    assert sig.reason == "agartha_limit_pending"
+    assert strat.pending_limit_price == pytest.approx(0.9)
+    assert strat.bars_since_limit_placed == 1
+
+
+def test_agartha_entry_limit_expires_and_cancels_by_default():
+    strat = AgarthaStrategy(quote_order_qty_usdt=10.0, trailing_stop_pct=30.0,
+                            entry_limit_offset_pct=10.0, entry_limit_expiry_bars=3)
+    strat.on_bar(_ctx(price=1.0, cash=100.0, position_qty=0.0, avg_entry=0.0))
+    # 3 barras sin fill -> expira
+    for _ in range(2):
+        strat.on_bar(_ctx(price=1.05, cash=100.0, position_qty=0.0, avg_entry=0.0, low=0.95))
+    sig = strat.on_bar(_ctx(price=1.05, cash=100.0, position_qty=0.0, avg_entry=0.0, low=0.95))
+    assert sig.reason == "agartha_limit_expired_no_fill"
+    assert strat.pending_limit_price == 0.0
+
+
+def test_agartha_entry_limit_reprices_on_expiry_when_flag_set():
+    strat = AgarthaStrategy(quote_order_qty_usdt=10.0, trailing_stop_pct=30.0,
+                            entry_limit_offset_pct=10.0, entry_limit_expiry_bars=2,
+                            entry_limit_reprice_on_expiry=True)
+    strat.on_bar(_ctx(price=1.0, cash=100.0, position_qty=0.0, avg_entry=0.0))
+    strat.on_bar(_ctx(price=1.10, cash=100.0, position_qty=0.0, avg_entry=0.0, low=1.0))
+    sig = strat.on_bar(_ctx(price=1.20, cash=100.0, position_qty=0.0, avg_entry=0.0, low=1.10))
+    assert sig.reason == "agartha_limit_repriced"
+    assert strat.pending_limit_price == pytest.approx(1.08)  # 1.20 * 0.90
+
+
+def test_agartha_zero_offset_uses_immediate_buy_legacy():
+    """entry_limit_offset_pct=0 = comportamiento original (compra inmediata)."""
+    strat = AgarthaStrategy(quote_order_qty_usdt=10.0, trailing_stop_pct=30.0,
+                            entry_limit_offset_pct=0.0)
+    sig = strat.on_bar(_ctx(price=1.0, cash=100.0, position_qty=0.0, avg_entry=0.0))
+    assert sig.action == "buy"
+    assert sig.reason == "agartha_initial_entry"
 
 
 def test_suggest_params_agartha_respects_overrides():
