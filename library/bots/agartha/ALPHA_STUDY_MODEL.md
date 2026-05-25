@@ -289,7 +289,63 @@ sin-pump pasaron de negativos a positivos al permitir LIMIT profundas.
 
 ---
 
-## Analisis: ¿el breakeven_lock aporta o estorba? (2026-05-25)
+## Validacion bimodal con n=75 symbols (2026-05-25)
+
+Batch de 55 symbols nuevos lanzado con el espacio Optuna **restringido al
+bimodal** (`NORMAL_BREAKEVEN = [0, 40, 50, 60]`, `EXTREME_BREAKEVEN = [0, 70, 85, 100]`).
+Resultado: **55/55 OK** en ~42 minutos.
+
+### Confirmacion del patron (promedio global por bin, n=75)
+
+| Bin `breakeven_lock_pct` | Avg return (n=75) |
+|---|---:|
+| **be=0** | **+97.9 %** |
+| 1-15 | +63.1 % (data legacy, no explorado) |
+| 15-35 | +33.3 % (legacy, valle confirmado) |
+| **35-65** | **+89.4 %** (sweet spot nuevo espacio) |
+| 65-100 | +45.3 % |
+| 100-200 | +44.6 % (legacy, lock casi inactivo) |
+
+Distribucion del best `breakeven_lock_pct` (n=75):
+- **be=0: 31 symbols (41 %)**
+- 0<be<50: 5 symbols (legacy, en proceso de re-optimizacion)
+- **be>=50: 39 symbols (52 %)**
+- **93 % de los symbols caen en el bimodal** → confirmacion empirica.
+
+### Nuevos winners descubiertos
+
+| Symbol | Return | Best be | Best trailing | Best offset |
+|---|---:|---:|---:|---:|
+| **RAVE** | **+4043.81 %** | 50 | 28 % | 1 % |
+| **LAB** | +2927.59 % | 85 | 95 % | 3 % |
+| **BOB** | +1944.57 % | 0 | 40 % | 3 % |
+| **RIVER** | +1264.34 % | 0 | 70 % | 35 % |
+| **UB** | +691.46 % | 0 | 85 % | 35 % |
+| **POWER** | +686.65 % | 0 | 70 % | 1 % |
+| **GUA** | +670.00 % | 0 | 35 % | 1 % |
+| **FOLKS** | +603.26 % | 0 | 38 % | 0 % |
+| **PIEVERSE** | +584.40 % | 100 | 0.5 % | 35 % |
+
+### Tasa de exito ampliada (n=75)
+
+- **Winners (positivos)**: 67/75 = **89 %**
+- Mega-winners (>500 %): 10 symbols
+- Big winners (200-500 %): 21 symbols
+- Moderados (50-200 %): 24 symbols
+- Pequenos winners (0-50 %): 12 symbols
+- Losers (<0 %): 8 symbols (todos entre 0 y −6.5 %)
+- Break-even exactos: 3 (FIGHT, IP, SHARE, SKR)
+
+### Cartera teorica (75 × 10 USDT = 750 USDT)
+
+- Suma de retornos best-per-symbol: aprox **+85 000 % acumulado**
+- Mejores 10 aportan el grueso (RAVE solo: ×40 sobre 10 USDT = +400 USDT)
+- Pérdidas: ~−5 USDT cumulado (8 losers × ~−0.6 USDT promedio)
+- **Cartera teorica equity final ~10x el capital invertido** (techo in-sample)
+
+---
+
+## Analisis: ¿el breakeven_lock aporta o estorba? (2026-05-25, primer analisis)
 
 Cross-symbol study sobre **22 symbols × 100 trials cada uno = 2 200+ datapoints**.
 Reporte completo: `reports/entregables/cross_studies/BREAKEVEN_ANALYSIS.md`.
