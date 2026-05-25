@@ -43,7 +43,16 @@ def _utc_iso(ms: Optional[int] = None) -> str:
 
 
 class EventLogger:
-    """Persist events to DB + JSONL with one call site."""
+    """Persist events to DB + JSONL with one call site.
+
+    Durability
+    ----------
+    JSONL writes are **flushed + fsynced** by default (``fsync_jsonl=True``)
+    so that a hard crash (power loss, kernel panic) does not lose the
+    most recent forensic line. Set ``fsync_jsonl=False`` only in tests
+    where the OS page cache flush cost matters (~20-30 us per event on
+    a modern SSD).
+    """
 
     def __init__(
         self,
@@ -51,11 +60,13 @@ class EventLogger:
         *,
         jsonl_dir: str | os.PathLike[str] = "logs/agartha_cluster",
         echo_stdout: bool = True,
+        fsync_jsonl: bool = True,
     ):
         self.db = db
         self.jsonl_dir = Path(jsonl_dir)
         self.jsonl_dir.mkdir(parents=True, exist_ok=True)
         self.echo_stdout = bool(echo_stdout)
+        self.fsync_jsonl = bool(fsync_jsonl)
 
     def _jsonl_path(self, ts_ms: int) -> Path:
         return self.jsonl_dir / f"events_{_utc_day(ts_ms)}.jsonl"
@@ -101,6 +112,15 @@ class EventLogger:
         path = self._jsonl_path(ts_ms)
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+            if self.fsync_jsonl:
+                fh.flush()
+                try:
+                    os.fsync(fh.fileno())
+                except OSError:
+                    # Some filesystems (e.g. mounted tmpfs in CI) reject fsync;
+                    # the flush() above already pushed user-space buffers, so the
+                    # data is at least in the OS page cache.
+                    pass
 
         if self.echo_stdout:
             sym = f" {event.symbol}" if event.symbol else ""

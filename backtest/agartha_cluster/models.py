@@ -128,6 +128,12 @@ class EventKind(str, Enum):
     RECONCILIATION_DRIFT = "reconciliation_drift"
     HEALTH_CHECK = "health_check"
 
+    SERVICE_RECOVERY_STARTED = "service_recovery_started"
+    SERVICE_RECOVERY_COMPLETED = "service_recovery_completed"
+    SERVICE_PREVIOUS_CRASH_DETECTED = "service_previous_crash_detected"
+    ORDER_REQUERIED = "order_requeried"
+    FILL_REPLAYED = "fill_replayed"
+
 
 @dataclass(frozen=True)
 class SymbolParams:

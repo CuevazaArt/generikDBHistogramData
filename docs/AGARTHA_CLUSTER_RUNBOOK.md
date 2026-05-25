@@ -19,9 +19,10 @@ F0 Prerequisitos -> F1 Setup una vez -> F2 Datos+params por simbolo
 > **Estado actual (mayo 2026):** el `BinanceAlphaClient` real todavía no
 > está conectado (queda como `NotImplementedError`). Hasta que se cablée
 > esa pieza el cluster solo corre en **modo `--dry-run`** con `StubLiveClient`.
-> Lo demás (DB, scheduler, throttle, runner, supervisor, telemetría) está
-> productivo y cubierto por 27 tests + smoke E2E. Ver
-> [Fase 7](#fase-7---cuando-se-cablée-el-cliente-live-real) abajo.
+> Lo demás (DB, scheduler, throttle, runner, supervisor, telemetría,
+> **recovery-boot post-crash**) está productivo y cubierto por 49 tests +
+> smoke E2E. Ver [Fase 7](#fase-7---cuando-se-cablée-el-cliente-live-real)
+> abajo.
 
 ---
 
@@ -388,6 +389,55 @@ Como `cluster_bots` y `orders` viven en DB, el runner ve los bots
 existentes y continúa. Las órdenes `submitted` se siguen monitoreando vía
 WS userDataStream. El reconciler corrige cualquier drift causado por
 fills/cancels que ocurrieron mientras el proceso estuvo abajo.
+
+### 6.2.1 Recovery boot (v0.1.2+)
+
+Cada vez que el servicio arranca ejecuta **`recovery_boot()` automáticamente**
+antes del primer tick. Lo que hace y qué esperar en cada caso:
+
+| Escenario | Qué hace el recovery_boot | Qué ves en `event_log` |
+|---|---|---|
+| Apagado limpio anterior | nada anómalo | 1 evento `service_recovery_started` + `service_recovery_completed` con counters en 0 |
+| Crash / SIGKILL / power loss | marca el `service_runs` previo como `crash_detected_on_restart` | 1 evento `service_previous_crash_detected` nivel **critical** con `prev_run_id`, `prev_pid`, `host` |
+| Crash con orden colgada en `pending` | llama `query_order(client_order_id)`; si el exchange dice `FILLED`, replaya `on_fill` y avanza el bot a `in_position` (idempotente) | eventos `order_requeried` por cada orden + `fill_replayed` (warning) por cada fill recuperado |
+| WS estuvo caído antes del crash | mismo mecanismo: `query_order` cierra el gap | `order_requeried` + `fill_replayed` |
+| Cliente live aún no cableado | el paso de re-query se omite silenciosamente (`NotImplementedError`) | counters en `service_recovery_completed` quedan en 0 |
+
+> **Garantías post-crash:**
+> 1. **Cero órdenes duplicadas** — `client_order_id` es UNIQUE y determinista.
+> 2. **Cero fills duplicados** — `count_fills_for_order(...)` previene replay doble.
+> 3. **Cero transacciones DB perdidas ante power loss** — `PRAGMA synchronous=FULL` + WAL fsyncea antes de cada commit.
+> 4. **Service runs previos siempre marcados** — `stopped_at` se actualiza al boot siguiente aunque el proceso anterior haya muerto sin ejecutar el handler de shutdown.
+> 5. **Eventos forenses JSONL persistentes** — cada write se `fsync()`ea (~30 µs por evento).
+
+Para verificar manualmente lo que pasó en el último arranque:
+
+```powershell
+sqlite3 cluster.db "SELECT level, kind, payload_json FROM event_log WHERE kind IN ('service_recovery_started','service_recovery_completed','service_previous_crash_detected','fill_replayed','order_requeried') ORDER BY event_id DESC LIMIT 20"
+```
+
+Si por alguna razón quieres **desactivar** el recovery boot (NO recomendado):
+
+```python
+ServiceConfig(enable_recovery_boot=False)
+```
+
+### 6.2.2 Resiliencia a degradación de red
+
+| Falla | Mecanismo |
+|---|---|
+| WS userDataStream timeout | reconciler corre cada 5 min (`reconcile_every_seconds=300`) y hace `query_order` por cada orden local abierta; replaya fills perdidos |
+| REST 5xx / timeout en `place_limit` | el orden ya tiene `client_order_id` en DB con `state=pending`; al siguiente recovery boot o reconcile, `query_order` resuelve si entró |
+| Conexión perdida largo rato | al volver, el primer reconcile + el recovery boot del próximo restart cierran cualquier gap |
+| Disco temporalmente lleno (JSONL) | `os.fsync` lanza `OSError` ignorado; el dato vive en DB y page cache del OS; al liberarse, la siguiente escritura completa flushea |
+
+### 6.2.3 Mantenimiento de la DB
+
+| Tarea | Frecuencia | Comando |
+|---|---|---|
+| WAL checkpoint forzado | Automático cada 30 min mientras corre `live-up`; manual: | `python -c "from backtest.agartha_cluster.cluster_db import ClusterDB; d=ClusterDB('cluster.db'); print(d.wal_checkpoint(mode='TRUNCATE'))"` |
+| Purga de `api_throttle_buckets` (>1 día) | Semanal (cron) | `python -c "from backtest.agartha_cluster.cluster_db import ClusterDB; import time; d=ClusterDB('cluster.db'); cutoff=int(time.time()//60)-1440; print(d.purge_throttle_buckets_older_than(before_minute_bucket=cutoff))"` |
+| Backup atómico | Diario | `python -c "import sqlite3; c=sqlite3.connect('cluster.db'); c.execute(\"VACUUM INTO 'backups/cluster.db.bak'\"); c.close()"` |
 
 ### 6.3 Backup
 

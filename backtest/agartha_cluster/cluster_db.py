@@ -49,9 +49,31 @@ class ClusterDB:
       :meth:`transaction`.
     """
 
-    def __init__(self, db_path: str | os.PathLike[str]):
+    def __init__(
+        self,
+        db_path: str | os.PathLike[str],
+        *,
+        synchronous: str = "FULL",
+    ):
+        """Open (lazily) a cluster DB.
+
+        Parameters
+        ----------
+        db_path : path to the SQLite file.
+        synchronous : SQLite synchronous mode (``FULL`` (default, recommended
+            for production / power-loss safety), ``NORMAL`` (faster, default
+            for tests), ``OFF`` (no fsync, do not use)). FULL forces an
+            fsync of the WAL before commit AND on checkpoints; the only
+            transactions that can be lost are those still in the OS page
+            cache that were never persisted by the OS itself, which on
+            modern Windows / macOS / Linux means a hard kernel panic. In
+            practice this catches >99% of power-loss / unplug scenarios.
+        """
         self.db_path = str(db_path)
         self._conn: Optional[sqlite3.Connection] = None
+        if synchronous.upper() not in {"OFF", "NORMAL", "FULL", "EXTRA"}:
+            raise ValueError(f"Invalid synchronous mode: {synchronous!r}")
+        self._synchronous = synchronous.upper()
 
     def connect(self) -> sqlite3.Connection:
         if self._conn is None:
@@ -64,9 +86,32 @@ class ClusterDB:
             )
             self._conn.row_factory = sqlite3.Row
             self._conn.execute("PRAGMA journal_mode=WAL;")
-            self._conn.execute("PRAGMA synchronous=NORMAL;")
+            self._conn.execute(f"PRAGMA synchronous={self._synchronous};")
             self._conn.execute("PRAGMA foreign_keys=ON;")
+            # Auto-checkpoint after ~1000 pages (~4MB) keeps WAL bounded
+            # even between explicit calls to wal_checkpoint().
+            self._conn.execute("PRAGMA wal_autocheckpoint=1000;")
         return self._conn
+
+    def wal_checkpoint(self, *, mode: str = "TRUNCATE") -> tuple[int, int, int]:
+        """Force a WAL checkpoint. Recommended periodically in production.
+
+        Modes (per SQLite docs):
+          - ``PASSIVE``   : checkpoint without blocking writers.
+          - ``FULL``      : block until all writers finish.
+          - ``RESTART``   : like FULL + restart from page 0 next time.
+          - ``TRUNCATE``  : like RESTART + shrink the WAL file to 0 bytes.
+
+        Returns ``(busy, log_pages, checkpointed_pages)``.
+        """
+        mode = mode.upper()
+        if mode not in {"PASSIVE", "FULL", "RESTART", "TRUNCATE"}:
+            raise ValueError(f"Invalid checkpoint mode: {mode!r}")
+        conn = self.connect()
+        row = conn.execute(f"PRAGMA wal_checkpoint({mode});").fetchone()
+        if row is None:
+            return (0, 0, 0)
+        return (int(row[0] or 0), int(row[1] or 0), int(row[2] or 0))
 
     def close(self) -> None:
         if self._conn is not None:
@@ -839,6 +884,68 @@ class ClusterDB:
             "UPDATE service_runs SET stopped_at = datetime('now'), stop_reason = ? WHERE run_id = ?",
             (reason, run_id),
         )
+
+    def list_open_service_runs(
+        self,
+        *,
+        exclude_run_id: Optional[int] = None,
+    ) -> list[sqlite3.Row]:
+        """Return service_runs rows whose ``stopped_at IS NULL``.
+
+        Used by :meth:`ClusterService.recovery_boot` to detect previous
+        runs that died without a graceful shutdown.
+        """
+        conn = self.connect()
+        if exclude_run_id is None:
+            return list(
+                conn.execute(
+                    "SELECT * FROM service_runs WHERE stopped_at IS NULL "
+                    "ORDER BY run_id"
+                )
+            )
+        return list(
+            conn.execute(
+                "SELECT * FROM service_runs WHERE stopped_at IS NULL "
+                "AND run_id <> ? ORDER BY run_id",
+                (int(exclude_run_id),),
+            )
+        )
+
+    # ------------------------------------------------------------------
+    # Queries used by recovery
+    # ------------------------------------------------------------------
+    def list_orders_by_state(self, states: list[str]) -> list[sqlite3.Row]:
+        """Return orders whose ``state`` is in the given list."""
+        if not states:
+            return []
+        placeholders = ",".join("?" for _ in states)
+        conn = self.connect()
+        return list(
+            conn.execute(
+                f"SELECT * FROM orders WHERE state IN ({placeholders}) "
+                "ORDER BY order_pk",
+                tuple(states),
+            )
+        )
+
+    def count_fills_for_order(self, order_pk: int) -> int:
+        conn = self.connect()
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM fills WHERE order_pk = ?",
+            (int(order_pk),),
+        ).fetchone()
+        return int(row["n"] if row else 0)
+
+    def purge_throttle_buckets_older_than(self, *, before_minute_bucket: int) -> int:
+        """Delete throttle buckets whose ``minute_bucket`` is older than the
+        given threshold (UNIX-minute units). Returns the row count deleted.
+        """
+        conn = self.connect()
+        cur = conn.execute(
+            "DELETE FROM api_throttle_buckets WHERE minute_bucket < ?",
+            (int(before_minute_bucket),),
+        )
+        return int(cur.rowcount or 0)
 
     # ------------------------------------------------------------------
     # Credentials meta

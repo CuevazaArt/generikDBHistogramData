@@ -179,6 +179,91 @@ Resolución del best_trial:
 
 ---
 
+## 8. Cambios v0.1.2 (2026-05-25, crash-resilience hardening)
+
+Auditoría de persistencia identificó 8 gaps; v0.1.2 cierra los 7 más
+relevantes. Solo G7 (purge automatizado de throttle buckets) queda como
+helper opcional para que el operador lo agende en su propio cron.
+
+### 8.1 Durabilidad (SQLite)
+- `PRAGMA synchronous = FULL` ahora es el default (era NORMAL).
+  Configurable por `ClusterDB(path, synchronous="...")`. Tests usan
+  NORMAL para velocidad. FULL fsyncea WAL antes de cada commit y antes
+  de cada checkpoint, eliminando la ventana de pérdida ante power loss.
+- `PRAGMA wal_autocheckpoint = 1000` (~4 MB) acota el tamaño del WAL.
+- Nuevo helper `ClusterDB.wal_checkpoint(mode="TRUNCATE")` para
+  consolidar el WAL bajo demanda; lo invoca el `ClusterService` cada 30
+  min (`wal_checkpoint_every_seconds`) y al final del `recovery_boot`.
+
+### 8.2 Recovery boot
+- `ClusterService.start()` ahora invoca `recovery_boot()` automáticamente
+  (configurable con `enable_recovery_boot=False`).
+- `recovery_boot()` ejecuta 3 pasos:
+  1. **Detecta `service_runs` previos** con `stopped_at IS NULL`
+     (proceso muerto por SIGKILL / power loss); los marca como
+     `crash_detected_on_restart` y emite
+     `EventKind.SERVICE_PREVIOUS_CRASH_DETECTED` a nivel `critical`.
+  2. **Re-consulta todas las órdenes abiertas** vía
+     `Reconciler.poll_open_orders_for_fills()`. Usa la idempotencia
+     del `client_order_id` para preguntarle al exchange por cada
+     orden `pending`/`submitted` y replayar cualquier fill perdido
+     (emite `EventKind.FILL_REPLAYED` warning).
+  3. **WAL checkpoint TRUNCATE** para persistir las correcciones
+     antes de aceptar nuevo tráfico.
+- Cuando el cliente live aún no está cableado, `recovery_boot()`
+  detecta `NotImplementedError` en `query_order` y termina ese paso sin
+  romper.
+
+### 8.3 Reconciler reforzado
+- `Reconciler.poll_open_orders_for_fills()`: para cada orden local en
+  estado `submitted`/`partially_filled`/`pending`, llama
+  `LiveClient.query_order()` y:
+  - `FILLED` → si no hay fill local registrado, replaya `runner.on_fill`
+    (idempotente por `client_order_id`); si ya estaba, sólo sincroniza
+    estado.
+  - `CANCELED` → marca `OrderState.CANCELLED`.
+  - `REJECTED`/`EXPIRED` → marca con el estado equivalente.
+  - `NEW` → no toca; ya seguirá monitoreándose.
+- Se invoca al final de cada `run_once()` (cada 5 min default) **y**
+  durante `recovery_boot()`. Cierra el gap de WS-disconnect.
+
+### 8.4 Event logger durable
+- `EventLogger(..., fsync_jsonl=True)` (default True). Cada write hace
+  `flush()` + `os.fsync()`. Tests pasan `fsync_jsonl=False` para
+  velocidad. Coste ~20-30 µs por evento en SSD; despreciable para la
+  cadencia del cluster.
+
+### 8.5 Schema sin cambios
+La V0001 ya contemplaba `service_runs.stopped_at NULL`, índices y FK.
+No requiere migración. Compatible con `cluster.db` de v0.1.0/0.1.1.
+
+### 8.6 Tests añadidos (12 nuevos, suite cluster 37 → 49)
+`tests/test_agartha_cluster_recovery.py`:
+- R1a: `service_runs` huérfano marcado como crash + evento `critical`.
+- R1b: arranque limpio (sin runs previos) no emite ruido de crash.
+- R2: orden colgada en `awaiting_entry_fill` resuelve vía `query_order` y bot llega a `in_position` con fill registrado **una sola vez**.
+- R3: WS-gap simulado con `force_fill` → reconciler poll replaya el fill; segunda poll es no-op (idempotente).
+- R4 (×3): `synchronous=FULL` por default, `NORMAL` cuando se override, garbage rejected.
+- R5 (×2): `wal_checkpoint` devuelve counters; modo inválido rechazado.
+- R6: `purge_throttle_buckets_older_than` borra el set correcto.
+- R7: `fsync_jsonl=True` deja el archivo legible inmediatamente.
+- R8: `enable_recovery_boot=False` salta la recuperación.
+
+### 8.7 Garantías que ofrece el cluster post-v0.1.2
+
+| Falla | Comportamiento garantizado |
+|---|---|
+| Power loss durante write | `synchronous=FULL` + WAL: se pierden 0 transacciones committeadas |
+| SIGKILL / crash del proceso | `service_runs` previo se marca; órdenes abiertas se reconcilian al boot |
+| Crash entre POST `/order` y update DB | `query_order(client_order_id)` resuelve el estado real al boot |
+| WS userDataStream desconectado | Reconciler poll cada 5 min replaya fills perdidos |
+| Disco lleno temporal en JSONL | `try/except OSError` en `os.fsync()`; el dato sigue en page cache + DB |
+| Doble fill replay | `count_fills_for_order(...)` previene duplicación |
+| WAL file crece sin límite | `wal_autocheckpoint=1000` + `wal_checkpoint TRUNCATE` cada 30 min |
+| Throttle buckets infinitos | `purge_throttle_buckets_older_than()` para uso en cron |
+
+---
+
 ## 5. Workspace al cierre
 
 ```

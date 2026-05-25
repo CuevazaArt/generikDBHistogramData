@@ -29,7 +29,7 @@ from backtest.agartha_cluster.models import (
 from backtest.agartha_cluster.reconciler import Reconciler
 from backtest.agartha_cluster.scheduler import DeployScheduler
 
-CLUSTER_VERSION = "0.1.0"
+CLUSTER_VERSION = "0.1.2"
 
 
 @dataclass
@@ -39,6 +39,10 @@ class ServiceConfig:
     reconcile_every_seconds: int = 300
     capital_usdt_per_bot: float = 10.0
     initial_correlation_prefix: str = "agc"
+    # Crash-recovery
+    enable_recovery_boot: bool = True
+    # WAL maintenance
+    wal_checkpoint_every_seconds: int = 60 * 30      # 30 min, TRUNCATE mode
 
 
 class ClusterService:
@@ -63,8 +67,18 @@ class ClusterService:
         self.reconciler = reconciler
         self.config = config or ServiceConfig()
         self._stop = False
-        self._last_reconcile = 0.0
+        # Initialise to "now" so the first reconcile and the first WAL
+        # checkpoint happen after the configured interval, not on the
+        # very first tick (which would surprise the operator and break
+        # test assumptions about order state between place and fill).
+        _now = time.time()
+        self._last_reconcile = _now
+        self._last_wal_checkpoint = _now
         self._run_id: Optional[int] = None
+        # Wire the reconciler to the runner's on_fill so missed fills
+        # discovered by the periodic poll can be replayed idempotently.
+        if getattr(self.reconciler, "_on_fill", None) is None:
+            self.reconciler.set_on_fill(self.runner.on_fill)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -81,6 +95,87 @@ class ClusterService:
             source=EventSource.SERVICE,
             payload={"mode": self.config.mode, "run_id": self._run_id, "version": CLUSTER_VERSION},
         )
+        if self.config.enable_recovery_boot:
+            self.recovery_boot()
+
+    # ------------------------------------------------------------------
+    # Crash-recovery sweep
+    # ------------------------------------------------------------------
+    def recovery_boot(self) -> dict:
+        """Run a one-shot recovery sweep right after :meth:`start`.
+
+        Steps:
+          1. Mark any previous ``service_runs`` whose ``stopped_at`` is
+             NULL as ``crash_detected_on_restart`` and emit a critical
+             event. Power-loss / SIGKILL leave such rows behind.
+          2. For each order in ``pending`` / ``submitted`` / ``partially_filled``,
+             call ``query_order`` to learn its true state on the exchange.
+             Replay any fill that we missed (e.g. crashed mid-place_limit
+             or WS disconnected). All transitions are idempotent thanks
+             to the deterministic ``client_order_id``.
+          3. Force a WAL checkpoint so the recovery writes are durably
+             persisted before the main loop starts taking orders.
+        """
+        summary = {
+            "previous_crashes": 0,
+            "orders_queried": 0,
+            "orders_filled": 0,
+            "orders_cancelled": 0,
+            "orders_rejected": 0,
+            "fills_replayed": 0,
+            "errors": 0,
+        }
+        self.events.info(
+            kind=EventKind.SERVICE_RECOVERY_STARTED,
+            source=EventSource.SERVICE,
+            payload={"run_id": self._run_id},
+        )
+
+        # 1. Detect previous crashed runs.
+        open_runs = self.db.list_open_service_runs(exclude_run_id=self._run_id)
+        for r in open_runs:
+            self.db.stop_service_run(
+                int(r["run_id"]), reason="crash_detected_on_restart"
+            )
+            summary["previous_crashes"] += 1
+            self.events.critical(
+                kind=EventKind.SERVICE_PREVIOUS_CRASH_DETECTED,
+                source=EventSource.SERVICE,
+                payload={
+                    "prev_run_id": int(r["run_id"]),
+                    "prev_pid": r["pid"],
+                    "started_at": r["started_at"],
+                    "mode": r["mode"],
+                    "host": r["host"],
+                },
+            )
+
+        # 2. Re-query open orders and replay missed fills via the reconciler
+        #    (same code path that runs every reconcile tick).
+        try:
+            poll = self.reconciler.poll_open_orders_for_fills()
+            summary["orders_queried"] = poll.get("queried", 0)
+            summary["orders_filled"] = poll.get("filled", 0)
+            summary["orders_cancelled"] = poll.get("cancelled", 0)
+            summary["orders_rejected"] = poll.get("rejected", 0)
+            summary["fills_replayed"] = poll.get("replayed", 0)
+            summary["errors"] = poll.get("errors", 0)
+        except NotImplementedError:
+            # Real client not wired yet; the rest of recovery still applies.
+            pass
+
+        # 3. Durably persist recovery writes via a WAL checkpoint.
+        try:
+            self.db.wal_checkpoint(mode="TRUNCATE")
+        except Exception:  # noqa: BLE001
+            pass
+
+        self.events.info(
+            kind=EventKind.SERVICE_RECOVERY_COMPLETED,
+            source=EventSource.SERVICE,
+            payload=summary,
+        )
+        return summary
 
     def stop(self, reason: str = "graceful_shutdown") -> None:
         self._stop = True
@@ -128,6 +223,19 @@ class ClusterService:
                 # Real client not wired yet; reconciler is a no-op in this case.
                 pass
             self._last_reconcile = time.time()
+
+        # 4. Periodic WAL checkpoint (bounds WAL file size, speeds future
+        #    recoveries). TRUNCATE shrinks the WAL back to 0 bytes.
+        if (
+            self.config.wal_checkpoint_every_seconds > 0
+            and (time.time() - self._last_wal_checkpoint)
+            >= self.config.wal_checkpoint_every_seconds
+        ):
+            try:
+                self.db.wal_checkpoint(mode="TRUNCATE")
+            except Exception:  # noqa: BLE001
+                pass
+            self._last_wal_checkpoint = time.time()
 
     # ------------------------------------------------------------------
     # Internal
