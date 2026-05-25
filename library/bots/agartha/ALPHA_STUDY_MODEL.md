@@ -175,5 +175,10 @@ Cobertura de tests: `tests/test_alpha_resolver.py` (regresion de cada regla).
 | **LRCXon** | 2026-05-24 | **N/A** | - | **NO TRADEABLE**: registrado en token list pero `tradeable=[]`. Pipeline falla limpio. |
 | **CHECK** | 2026-05-24 | **-0.47 %** | 25.0 % | Checkmate (Base, USDC); 5036 velas; sin pump |
 | **BTW** | 2026-05-24 | **+163.45 %** | 20.0 % | Bitway (BSC); 8012 velas (84 dias); pump grande capturado |
+| **IN** | 2026-05-24 | **+21.22 %** | 10.0 % | INFINIT (BSC, alphaId 312); 7781 velas (~81 d); pump moderado |
+| **ZEST** | 2026-05-24 | **+144.43 %** | **3.0 %** | Zest Protocol (BSC, alphaId 970); 529 velas (~5 d); trailing ultra-corto + activation 150% |
+| **BSB** | 2026-05-24 | **+662.74 %** | **80.0 %** | Block Street (BSC, alphaId 790); 7837 velas (~81 d); mega pump; trailing **extremo alto** + breakeven 75% |
+| **UP** | 2026-05-24 | **+330.59 %** | **80.0 %** | Unitas (BSC, alphaId 804); 6969 velas (~72 d); pump grande; mismo perfil que BSB |
+| **SHARE** | 2026-05-24 | **-1.41 %** | 30.0 % | ShareX Token (BSC, alphaId 956); 1597 velas (~16 d); sin pump significativo |
 
 (añadir filas conforme se evaluen nuevos simbolos)
