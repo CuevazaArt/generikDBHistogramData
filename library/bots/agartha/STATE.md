@@ -1,6 +1,34 @@
 # Estado Agartha — handoff entre sesiones
 
-Actualizado: 2026-05-25 07:42 UTC (cierre de sesion intensiva)
+Actualizado: 2026-05-26 04:26 UTC (auditoria cluster + simulacion compuesta)
+
+## Update rapido 2026-05-25 noche (post-pull remoto)
+
+- Repo remoto sincronizado (fast-forward a `5d4c7b1`, Agartha cluster v0.1.2).
+- Auditoria local del cluster:
+  - `pytest tests/test_agartha_cluster_*` => **49 passed**
+  - `python scripts/agartha_cluster_smoke.py --help` (smoke integrado) => **ALL EXPECTATIONS MET**
+- Simulacion Monte Carlo 24 meses, reinversion mensual, costos explicitos:
+  - `fee+slippage roundtrip = 0.35 %`
+  - `n_bots = 50`
+  - `capital inicial = 1000 USDT`
+  - `120,000` trayectorias
+
+### Comparativa cap de exposicion por bot (2 anos)
+
+- `cap=1.5 %` por bot (deploy promedio 75 %):
+  - `base_live_quincenal`: p50 **1681 USDT** (CAGR mediana **29.7 %**)
+  - `agresivo_live_semanal`: p50 **2464 USDT** (CAGR mediana **57.0 %**)
+  - `stress_live`: p50 **1038 USDT**, prob(`<1000`) **31.5 %**
+
+- `cap=2.0 %` por bot (deploy promedio 100 %):
+  - `base_live_quincenal`: p50 **1991 USDT** (CAGR mediana **41.1 %**)
+  - `agresivo_live_semanal`: p50 **3302 USDT** (CAGR mediana **81.7 %**)
+  - `stress_live`: p50 **1051 USDT**, prob(`<1000`) **31.1 %**
+
+Lectura: subir deploy de 75 % a 100 % aumenta de forma relevante el upside en
+regimen base/agresivo. En stress la mejora es marginal y la cola de riesgo se
+mantiene alta; conviene combinar cap dinamico + controles operativos.
 
 ## Resumen de la sesion 2026-05-24
 
