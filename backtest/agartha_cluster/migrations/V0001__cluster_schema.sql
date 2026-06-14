@@ -267,6 +267,22 @@ CREATE TABLE IF NOT EXISTS credentials_meta (
 );
 
 -- =============================================================
+-- Métricas de consumo de recursos (CPU, RAM, Disco)
+-- =============================================================
+CREATE TABLE IF NOT EXISTS resource_metrics (
+    metric_id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts_ms                   INTEGER NOT NULL,
+    proc_cpu_pct            REAL,
+    proc_ram_mb             REAL,
+    host_cpu_pct            REAL,
+    host_ram_pct            REAL,
+    disk_used_gb            REAL,
+    disk_free_gb            REAL,
+    disk_pct                REAL
+);
+CREATE INDEX IF NOT EXISTS idx_resource_metrics_ts ON resource_metrics(ts_ms);
+
+-- =============================================================
 -- Schema version
 -- =============================================================
 CREATE TABLE IF NOT EXISTS schema_meta (

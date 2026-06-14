@@ -64,6 +64,8 @@ def _build_service(
 ) -> ClusterService:
     events = EventLogger(db, jsonl_dir=log_dir, echo_stdout=True)
     throttle = ApiThrottle(db, ThrottleConfig())
+    if hasattr(client, "set_throttle"):
+        client.set_throttle(throttle)
     scheduler = DeployScheduler(
         db,
         throttle,
@@ -458,6 +460,8 @@ def cmd_supervisor_close(args: argparse.Namespace) -> int:
     client = _build_client(args.dry_run, db)
     events = EventLogger(db, jsonl_dir=args.log_dir, echo_stdout=True)
     throttle = ApiThrottle(db, ThrottleConfig())
+    if hasattr(client, "set_throttle"):
+        client.set_throttle(throttle)
     runner = BotRunner(db=db, client=client, throttle=throttle, events=events)
     bot = db.get_bot(args.bot_id)
     if bot is None:
@@ -500,6 +504,113 @@ def cmd_report(args: argparse.Namespace) -> int:
         for ev in events:
             print(f"    {ev['ts_ms']}  {ev['kind']:24s}  {ev['level']:8s}  {ev['source']}")
     db.close()
+    return 0
+
+
+def cmd_report_resources(args: argparse.Namespace) -> int:
+    db = _open_db(args.db)
+    since_ms = int((time.time() - (args.days * 86400)) * 1000)
+    metrics = db.get_resource_metrics(since_ms=since_ms)
+    db.close()
+
+    if not metrics:
+        print(f"No hay métricas registradas en los últimos {args.days} días.")
+        return 0
+
+    n = len(metrics)
+    proc_cpus = [m["proc_cpu_pct"] for m in metrics]
+    proc_rams = [m["proc_ram_mb"] for m in metrics]
+    host_cpus = [m["host_cpu_pct"] for m in metrics]
+    host_rams = [m["host_ram_pct"] for m in metrics]
+    disk_useds = [m["disk_used_gb"] for m in metrics]
+    disk_frees = [m["disk_free_gb"] for m in metrics]
+    disk_pcts = [m["disk_pct"] for m in metrics]
+
+    def avg(lst): return sum(lst) / len(lst)
+    def p95(lst):
+        s = sorted(lst)
+        idx = int(len(s) * 0.95)
+        return s[min(idx, len(s) - 1)]
+    def peak(lst): return max(lst)
+
+    avg_p_cpu, p95_p_cpu, peak_p_cpu = avg(proc_cpus), p95(proc_cpus), peak(proc_cpus)
+    avg_p_ram, p95_p_ram, peak_p_ram = avg(proc_rams), p95(proc_rams), peak(proc_rams)
+    avg_h_cpu, p95_h_cpu, peak_h_cpu = avg(host_cpus), p95(host_cpus), peak(host_cpus)
+    avg_h_ram, p95_h_ram, peak_h_ram = avg(host_rams), p95(host_rams), peak(host_rams)
+    max_disk_used, min_disk_free, max_disk_pct = peak(disk_useds), min(disk_frees), peak(disk_pcts)
+
+    print(f"============================================================")
+    print(f"REPORTE DE CONSUMO DE RECURSOS ({args.days} días, {n} muestras)")
+    print(f"============================================================")
+    print(f"Métrica            | Promedio    | Percentil 95 | Pico / Max  ")
+    print(f"------------------------------------------------------------")
+    print(f"CPU Proceso (%)    | {avg_p_cpu:11.2f} | {p95_p_cpu:12.2f} | {peak_p_cpu:11.2f}")
+    print(f"CPU Host (%)       | {avg_h_cpu:11.2f} | {p95_h_cpu:12.2f} | {peak_h_cpu:11.2f}")
+    print(f"RAM Proceso (MB)   | {avg_p_ram:11.2f} | {p95_p_ram:12.2f} | {peak_p_ram:11.2f}")
+    print(f"RAM Host (%)       | {avg_h_ram:11.2f} | {p95_h_ram:12.2f} | {peak_h_ram:11.2f}")
+    print(f"------------------------------------------------------------")
+    print(f"Almacenamiento (Carpeta actual / Base de datos):")
+    print(f"  - Máximo Uso de Disco: {max_disk_used:.2f} GB ({max_disk_pct:.2f}%)")
+    print(f"  - Mínimo Disco Libre:  {min_disk_free:.2f} GB")
+    print(f"============================================================")
+
+    # Cloud sizing recommendation logic
+    # Cores
+    if peak_h_cpu < 30.0:
+        rec_cores = 1
+    elif peak_h_cpu < 70.0:
+        rec_cores = 2
+    else:
+        rec_cores = 4
+
+    # Memory
+    needed_ram_gb = (p95_p_ram / 1024.0) + 1.0
+    if needed_ram_gb <= 1.0:
+        rec_ram_gb = 1
+    elif needed_ram_gb <= 2.0:
+        rec_ram_gb = 2
+    elif needed_ram_gb <= 4.0:
+        rec_ram_gb = 4
+    else:
+        rec_ram_gb = 8
+
+    # Disk
+    needed_disk_gb = max_disk_used + 25.0
+    if needed_disk_gb <= 20.0:
+        rec_disk_gb = 20
+    elif needed_disk_gb <= 40.0:
+        rec_disk_gb = 40
+    elif needed_disk_gb <= 80.0:
+        rec_disk_gb = 80
+    else:
+        rec_disk_gb = 160
+
+    print(f"\nDISEÑO Y RECOMENDACIÓN DE SERVICIO CLOUD (VPS / DEDICADO):")
+    print(f"------------------------------------------------------------")
+    print(f"1. Recomendación para ejecución remota en la nube (Solo Live trading):")
+    print(f"   - vCPUs recomendados:   {rec_cores} Core(s)")
+    print(f"   - RAM recomendada:     {rec_ram_gb} GB")
+    print(f"   - Almacenamiento SSD:  {rec_disk_gb} GB")
+    print(f"   * Perfiles de ejemplo sugeridos:")
+    if rec_ram_gb <= 1:
+        print(f"     - AWS: EC2 t3.micro (1 vCPU, 1 GB RAM)")
+        print(f"     - DigitalOcean: Starter Droplet (1 vCPU, 1 GB RAM)")
+    elif rec_ram_gb <= 2:
+        print(f"     - AWS: EC2 t3.small (2 vCPU, 2 GB RAM)")
+        print(f"     - DigitalOcean: Basic Droplet (1 vCPU, 2 GB RAM / 2 vCPU, 2 GB RAM)")
+    else:
+        print(f"     - AWS: EC2 t3.medium (2 vCPU, 4 GB RAM) o t3.large")
+        print(f"     - DigitalOcean: General Purpose / Basic Droplet (4 GB o 8 GB RAM)")
+
+    print(f"\n2. Recomendación para ejecución con Optimización pesada local (Optuna):")
+    print(f"   - Si decide correr Optuna/Ray y backtests pesados en el mismo servidor en vivo:")
+    print(f"     - Se aconseja un servidor de al menos: 4 a 8 vCPUs dedicados, 16 GB de RAM, y 100 GB+ SSD.")
+    print(f"     - Esto se debe a que la optimización requiere mucha CPU y memoria paralela, además de la base")
+    print(f"       de datos klines.db que actualmente pesa ~70.8 GB.")
+    print(f"   - Tesis Recomendada: Seguir corriendo Optuna de forma pesada y local una vez a la semana,")
+    print(f"     y únicamente cargar las configuraciones al cluster en la nube (que puede ser un VPS pequeño).")
+    print(f"============================================================")
+
     return 0
 
 
@@ -624,7 +735,20 @@ def build_parser() -> argparse.ArgumentParser:
     spl = ssub.add_parser("list-stale", help="List bots in STALE_EXIT.")
     spl.set_defaults(func=cmd_supervisor_list_stale)
 
+    sp = sub.add_parser(
+        "report-resources",
+        help="Analiza registros de consumo de recursos y recomienda VPS.",
+    )
+    sp.add_argument(
+        "--days",
+        type=int,
+        default=30,
+        help="Número de días de historial a analizar (default: 30).",
+    )
+    sp.set_defaults(func=cmd_report_resources)
+
     return p
+
 
 
 def main(argv: Optional[list[str]] = None) -> int:

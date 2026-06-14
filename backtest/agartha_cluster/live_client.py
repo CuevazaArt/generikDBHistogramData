@@ -16,8 +16,17 @@ import math
 import random
 import time
 import uuid
+import hmac
+import hashlib
+import urllib.parse
+import json
+import asyncio
+import threading
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Optional, Protocol
+
+import requests
+import websockets
 
 from backtest.agartha_cluster.models import OrderSide, OrderType
 
@@ -75,6 +84,8 @@ class LiveClient(Protocol):
     def cancel_order(self, *, symbol: str, client_order_id: str) -> PlaceOrderResult: ...
     def query_order(self, *, symbol: str, client_order_id: str) -> PlaceOrderResult: ...
     def get_account(self) -> AccountSnapshot: ...
+    def start_user_data_stream(self, on_fill: Callable[..., None]) -> None: ...
+    def stop_user_data_stream(self) -> None: ...
 
 
 # =============================================================
@@ -305,6 +316,12 @@ class StubLiveClient:
             ],
         )
 
+    def start_user_data_stream(self, on_fill: Callable[..., None]) -> None:
+        pass
+
+    def stop_user_data_stream(self) -> None:
+        pass
+
     # ------------------------------------------------------------------
     # Test helpers (StubLiveClient only)
     # ------------------------------------------------------------------
@@ -324,50 +341,441 @@ class StubLiveClient:
 
 
 class BinanceAlphaClient:
-    """Real REST + WS client. **Not implemented** until live credentials.
+    """Real REST + WS client for Binance spot / Alpha trading."""
 
-    To wire this in (after ``cli live up`` provides credentials):
-
-    1. ``get_filters``: REST ``GET /api/v3/exchangeInfo`` filtered by
-       ``symbol`` (Alpha shares the spot endpoint). Cache 1 day.
-    2. ``get_price``: REST ``GET /api/v3/ticker/price`` (weight 1).
-    3. ``place_limit``: signed REST ``POST /api/v3/order`` with
-       ``type=LIMIT``, ``timeInForce=GTC``, ``newClientOrderId``.
-    4. ``cancel_order``: signed REST ``DELETE /api/v3/order``.
-    5. ``query_order``: signed REST ``GET /api/v3/order``.
-    6. ``get_account``: signed REST ``GET /api/v3/account``.
-    7. WS ``userDataStream`` (``listenKey`` flow) for executionReport
-       events; pushes go through :class:`event_logger.EventLogger`.
-
-    All signed requests must update :class:`ApiThrottle` with the
-    ``X-MBX-USED-WEIGHT-1M`` header from the response.
-    """
-
-    def __init__(self, *, api_key: str, api_secret: str, base_url: str = "https://api.binance.com"):
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        api_secret: str,
+        base_url: str = "https://api.binance.com",
+    ):
         self.api_key = api_key
         self.api_secret = api_secret
         self.base_url = base_url
+        self.throttle = None
+        self._on_fill_callback = None
+        self._ws_running = False
+        self._ws_thread = None
+        self._ws_loop = None
+        self._listen_key = None
+        self._keepalive_task = None
 
-    def _not_yet(self, endpoint: str):  # noqa: ANN001
-        raise NotImplementedError(
-            f"BinanceAlphaClient.{endpoint} not wired yet. "
-            "See docs/AGARTHA_CLUSTER.md section 'Pendientes hasta puesta en producción'."
-        )
+    def set_throttle(self, throttle) -> None:
+        self.throttle = throttle
+
+    def _reconcile_weight(self, response: requests.Response) -> None:
+        if self.throttle is not None:
+            header = response.headers.get("X-MBX-USED-WEIGHT-1M")
+            if header:
+                try:
+                    self.throttle.reconcile_server_weight(used_weight_1m=int(header))
+                except Exception:
+                    pass
+
+    def _send_signed_request(
+        self, method: str, path: str, params: dict
+    ) -> requests.Response:
+        url = f"{self.base_url}{path}"
+        params = dict(params)
+        if "timestamp" not in params:
+            params["timestamp"] = int(time.time() * 1000)
+
+        query_string = urllib.parse.urlencode(params)
+        signature = hmac.new(
+            self.api_secret.encode("utf-8"),
+            query_string.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        params["signature"] = signature
+
+        headers = {"X-MBX-APIKEY": self.api_key}
+
+        if method.upper() == "GET":
+            r = requests.get(url, params=params, headers=headers, timeout=10)
+        elif method.upper() == "POST":
+            r = requests.post(url, data=params, headers=headers, timeout=10)
+        elif method.upper() == "DELETE":
+            r = requests.delete(url, params=params, headers=headers, timeout=10)
+        else:
+            raise ValueError(f"Unsupported HTTP method: {method}")
+
+        self._reconcile_weight(r)
+        return r
 
     def get_filters(self, symbol: str) -> dict:
-        self._not_yet("get_filters")
+        url = f"{self.base_url}/api/v3/exchangeInfo"
+        r = requests.get(url, params={"symbol": symbol}, timeout=10)
+        self._reconcile_weight(r)
+        r.raise_for_status()
+        data = r.json()
+        sym_info = data["symbols"][0]
+        filters = sym_info["filters"]
+
+        tick_size = 1e-8
+        step_size = 1e-8
+        min_notional = 0.1
+        bid_mu = 5.0
+        bid_md = 0.2
+        ask_mu = 5.0
+        ask_md = 0.2
+
+        for f in filters:
+            ft = f["filterType"]
+            if ft == "PRICE_FILTER":
+                tick_size = float(f["tickSize"])
+            elif ft == "LOT_SIZE":
+                step_size = float(f["stepSize"])
+            elif ft == "NOTIONAL":
+                min_notional = float(f["minNotional"])
+            elif ft == "PERCENT_PRICE_BY_SIDE":
+                bid_mu = float(f["bidMultiplierUp"])
+                bid_md = float(f["bidMultiplierDown"])
+                ask_mu = float(f["askMultiplierUp"])
+                ask_md = float(f["askMultiplierDown"])
+
+        return {
+            "tick_size": tick_size,
+            "step_size": step_size,
+            "min_notional": min_notional,
+            "bid_multiplier_up": bid_mu,
+            "bid_multiplier_down": bid_md,
+            "ask_multiplier_up": ask_mu,
+            "ask_multiplier_down": ask_md,
+        }
 
     def get_price(self, symbol: str) -> float:
-        self._not_yet("get_price")
+        url = f"{self.base_url}/api/v3/ticker/price"
+        r = requests.get(url, params={"symbol": symbol}, timeout=10)
+        self._reconcile_weight(r)
+        r.raise_for_status()
+        return float(r.json()["price"])
 
-    def place_limit(self, **kw):  # noqa: ANN003
-        self._not_yet("place_limit")
+    def place_limit(
+        self,
+        *,
+        symbol: str,
+        side: OrderSide,
+        price: float,
+        qty: float,
+        client_order_id: str,
+    ) -> PlaceOrderResult:
+        params = {
+            "symbol": symbol,
+            "side": side.value,
+            "type": "LIMIT",
+            "timeInForce": "GTC",
+            "quantity": f"{qty:.8f}".rstrip("0").rstrip("."),
+            "price": f"{price:.8f}".rstrip("0").rstrip("."),
+            "newClientOrderId": client_order_id,
+            "newOrderRespType": "RESULT",
+        }
+        start_time = time.time()
+        try:
+            r = self._send_signed_request("POST", "/api/v3/order", params)
+            latency = int((time.time() - start_time) * 1000)
+            if r.status_code == 200:
+                data = r.json()
+                exec_qty = float(data["executedQty"])
+                cum_quote = float(data["cummulativeQuoteQty"])
+                avg_price = cum_quote / exec_qty if exec_qty > 0 else 0.0
+                return PlaceOrderResult(
+                    accepted=True,
+                    order_id=str(data["orderId"]),
+                    client_order_id=data["clientOrderId"],
+                    status=data["status"],
+                    avg_fill_price=avg_price,
+                    filled_qty=exec_qty,
+                    raw_response=r.text,
+                    latency_ms=latency,
+                )
+            else:
+                try:
+                    err_msg = r.json().get("msg") or r.text
+                except Exception:
+                    err_msg = r.text
+                return PlaceOrderResult(
+                    accepted=False,
+                    order_id=None,
+                    client_order_id=client_order_id,
+                    status="REJECTED",
+                    error=err_msg,
+                    raw_response=r.text,
+                    latency_ms=latency,
+                )
+        except Exception as e:
+            latency = int((time.time() - start_time) * 1000)
+            return PlaceOrderResult(
+                accepted=False,
+                order_id=None,
+                client_order_id=client_order_id,
+                status="REJECTED",
+                error=str(e),
+                latency_ms=latency,
+            )
 
-    def cancel_order(self, **kw):  # noqa: ANN003
-        self._not_yet("cancel_order")
+    def cancel_order(self, *, symbol: str, client_order_id: str) -> PlaceOrderResult:
+        params = {
+            "symbol": symbol,
+            "origClientOrderId": client_order_id,
+        }
+        start_time = time.time()
+        try:
+            r = self._send_signed_request("DELETE", "/api/v3/order", params)
+            latency = int((time.time() - start_time) * 1000)
+            if r.status_code == 200:
+                data = r.json()
+                exec_qty = float(data.get("executedQty", 0.0))
+                cum_quote = float(data.get("cummulativeQuoteQty", 0.0))
+                avg_price = (
+                    cum_quote / exec_qty if exec_qty > 0 else 0.0
+                )
+                return PlaceOrderResult(
+                    accepted=True,
+                    order_id=str(data["orderId"]),
+                    client_order_id=data["origClientOrderId"],
+                    status=data["status"],
+                    avg_fill_price=avg_price,
+                    filled_qty=exec_qty,
+                    raw_response=r.text,
+                    latency_ms=latency,
+                )
+            else:
+                try:
+                    err_msg = r.json().get("msg") or r.text
+                except Exception:
+                    err_msg = r.text
+                return PlaceOrderResult(
+                    accepted=False,
+                    order_id=None,
+                    client_order_id=client_order_id,
+                    status="UNKNOWN",
+                    error=err_msg,
+                    raw_response=r.text,
+                    latency_ms=latency,
+                )
+        except Exception as e:
+            latency = int((time.time() - start_time) * 1000)
+            return PlaceOrderResult(
+                accepted=False,
+                order_id=None,
+                client_order_id=client_order_id,
+                status="UNKNOWN",
+                error=str(e),
+                latency_ms=latency,
+            )
 
-    def query_order(self, **kw):  # noqa: ANN003
-        self._not_yet("query_order")
+    def query_order(self, *, symbol: str, client_order_id: str) -> PlaceOrderResult:
+        params = {
+            "symbol": symbol,
+            "origClientOrderId": client_order_id,
+        }
+        start_time = time.time()
+        try:
+            r = self._send_signed_request("GET", "/api/v3/order", params)
+            latency = int((time.time() - start_time) * 1000)
+            if r.status_code == 200:
+                data = r.json()
+                exec_qty = float(data.get("executedQty", 0.0))
+                cum_quote = float(data.get("cummulativeQuoteQty", 0.0))
+                avg_price = (
+                    cum_quote / exec_qty if exec_qty > 0 else 0.0
+                )
+                return PlaceOrderResult(
+                    accepted=True,
+                    order_id=str(data["orderId"]),
+                    client_order_id=data["clientOrderId"],
+                    status=data["status"],
+                    avg_fill_price=avg_price,
+                    filled_qty=exec_qty,
+                    raw_response=r.text,
+                    latency_ms=latency,
+                )
+            else:
+                try:
+                    err_msg = r.json().get("msg") or r.text
+                except Exception:
+                    err_msg = r.text
+                return PlaceOrderResult(
+                    accepted=False,
+                    order_id=None,
+                    client_order_id=client_order_id,
+                    status="UNKNOWN",
+                    error=err_msg,
+                    raw_response=r.text,
+                    latency_ms=latency,
+                )
+        except Exception as e:
+            latency = int((time.time() - start_time) * 1000)
+            return PlaceOrderResult(
+                accepted=False,
+                order_id=None,
+                client_order_id=client_order_id,
+                status="UNKNOWN",
+                error=str(e),
+                latency_ms=latency,
+            )
 
     def get_account(self) -> AccountSnapshot:
-        self._not_yet("get_account")
+        try:
+            r_acct = self._send_signed_request("GET", "/api/v3/account", {})
+            r_acct.raise_for_status()
+            acct_data = r_acct.json()
+
+            balances = {}
+            for b in acct_data.get("balances", []):
+                free = float(b.get("free", 0.0))
+                locked = float(b.get("locked", 0.0))
+                if free > 0 or locked > 0:
+                    balances[b["asset"]] = free + locked
+
+            r_orders = self._send_signed_request("GET", "/api/v3/openOrders", {})
+            r_orders.raise_for_status()
+            orders_data = r_orders.json()
+
+            open_orders = []
+            for o in orders_data:
+                open_orders.append(
+                    {
+                        "client_order_id": o["clientOrderId"],
+                        "order_id": str(o["orderId"]),
+                        "symbol": o["symbol"],
+                        "side": o["side"],
+                        "price": float(o["price"]),
+                        "qty": float(o["origQty"]),
+                        "status": o["status"],
+                    }
+                )
+
+            return AccountSnapshot(
+                timestamp_ms=acct_data.get("updateTime")
+                or int(time.time() * 1000),
+                balances=balances,
+                open_orders=open_orders,
+                raw=r_acct.text,
+            )
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to fetch live account snapshot: {e}"
+            ) from e
+
+    def start_user_data_stream(self, on_fill: Callable[..., None]) -> None:
+        self._on_fill_callback = on_fill
+        self._ws_running = True
+        self._ws_thread = threading.Thread(
+            target=self._run_ws_loop, daemon=True
+        )
+        self._ws_thread.start()
+
+    def stop_user_data_stream(self) -> None:
+        self._ws_running = False
+        if self._ws_loop and self._ws_loop.is_running():
+            self._ws_loop.call_soon_threadsafe(self._ws_loop.stop)
+        if self._ws_thread:
+            self._ws_thread.join(timeout=5.0)
+            self._ws_thread = None
+        if self._listen_key:
+            try:
+                headers = {"X-MBX-APIKEY": self.api_key}
+                requests.delete(
+                    f"{self.base_url}/api/v3/userDataStream",
+                    params={"listenKey": self._listen_key},
+                    headers=headers,
+                    timeout=5,
+                )
+            except Exception:
+                pass
+            self._listen_key = None
+
+    def _run_ws_loop(self) -> None:
+        self._ws_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self._ws_loop)
+        self._ws_loop.run_until_complete(self._ws_listener_main())
+        self._ws_loop.close()
+
+    async def _ws_listener_main(self) -> None:
+        try:
+            headers = {"X-MBX-APIKEY": self.api_key}
+            r = requests.post(
+                f"{self.base_url}/api/v3/userDataStream",
+                headers=headers,
+                timeout=10,
+            )
+            r.raise_for_status()
+            self._listen_key = r.json()["listenKey"]
+        except Exception:
+            return
+
+        self._keepalive_task = self._ws_loop.create_task(
+            self._keepalive_loop()
+        )
+
+        ws_url = f"wss://stream.binance.com:9443/ws/{self._listen_key}"
+        while self._ws_running:
+            try:
+                async with websockets.connect(ws_url) as websocket:
+                    while self._ws_running:
+                        msg_str = await websocket.recv()
+                        msg = json.loads(msg_str)
+                        self._handle_ws_message(msg)
+            except websockets.exceptions.ConnectionClosed:
+                if self._ws_running:
+                    await asyncio.sleep(5)
+            except Exception:
+                if self._ws_running:
+                    await asyncio.sleep(5)
+
+        if self._keepalive_task:
+            self._keepalive_task.cancel()
+
+    async def _keepalive_loop(self) -> None:
+        headers = {"X-MBX-APIKEY": self.api_key}
+        while self._ws_running:
+            await asyncio.sleep(30 * 60)
+            try:
+                requests.put(
+                    f"{self.base_url}/api/v3/userDataStream",
+                    params={"listenKey": self._listen_key},
+                    headers=headers,
+                    timeout=10,
+                )
+            except Exception:
+                pass
+
+    def _handle_ws_message(self, msg: dict) -> None:
+        if msg.get("e") == "executionReport" and msg.get("x") == "TRADE":
+            client_order_id = msg.get("c")
+            symbol = msg.get("s")
+            side_str = msg.get("S")
+            try:
+                side = OrderSide(side_str)
+            except Exception:
+                side = (
+                    OrderSide.BUY
+                    if side_str == "BUY"
+                    else OrderSide.SELL
+                )
+
+            price = float(msg.get("L", 0.0))
+            qty = float(msg.get("l", 0.0))
+            fee = float(msg.get("n", 0.0))
+            fee_asset = msg.get("N")
+            ts_ms = int(msg.get("E", int(time.time() * 1000)))
+            exchange_fill_id = str(msg.get("t", ""))
+
+            if self._on_fill_callback:
+                try:
+                    self._on_fill_callback(
+                        client_order_id=client_order_id,
+                        symbol=symbol,
+                        side=side,
+                        price=price,
+                        qty=qty,
+                        fee=fee,
+                        fee_asset=fee_asset,
+                        ts_ms=ts_ms,
+                        exchange_fill_id=exchange_fill_id,
+                        raw_payload=json.dumps(msg),
+                    )
+                except Exception:
+                    pass

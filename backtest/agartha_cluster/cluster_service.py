@@ -14,6 +14,11 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
+try:
+    import psutil
+except ImportError:
+    psutil = None
+
 from backtest.agartha_cluster.api_throttle import ApiThrottle
 from backtest.agartha_cluster.bot_runner import BotRunner
 from backtest.agartha_cluster.cluster_db import ClusterDB
@@ -29,7 +34,7 @@ from backtest.agartha_cluster.models import (
 from backtest.agartha_cluster.reconciler import Reconciler
 from backtest.agartha_cluster.scheduler import DeployScheduler
 
-CLUSTER_VERSION = "0.1.2"
+CLUSTER_VERSION = "0.1.3"
 
 
 @dataclass
@@ -43,6 +48,8 @@ class ServiceConfig:
     enable_recovery_boot: bool = True
     # WAL maintenance
     wal_checkpoint_every_seconds: int = 60 * 30      # 30 min, TRUNCATE mode
+    # Resource logging
+    resource_log_interval_seconds: int = 60
 
 
 class ClusterService:
@@ -74,6 +81,14 @@ class ClusterService:
         _now = time.time()
         self._last_reconcile = _now
         self._last_wal_checkpoint = _now
+        self._last_resource_log = _now
+        self._proc = psutil.Process() if psutil is not None else None
+        if psutil is not None and self._proc is not None:
+            try:
+                psutil.cpu_percent(interval=None)
+                self._proc.cpu_percent(interval=None)
+            except Exception:
+                pass
         self._run_id: Optional[int] = None
         # Wire the reconciler to the runner's on_fill so missed fills
         # discovered by the periodic poll can be replayed idempotently.
@@ -97,6 +112,9 @@ class ClusterService:
         )
         if self.config.enable_recovery_boot:
             self.recovery_boot()
+
+        if hasattr(self.client, "start_user_data_stream"):
+            self.client.start_user_data_stream(self.runner.on_fill)
 
     # ------------------------------------------------------------------
     # Crash-recovery sweep
@@ -179,6 +197,11 @@ class ClusterService:
 
     def stop(self, reason: str = "graceful_shutdown") -> None:
         self._stop = True
+        if hasattr(self.client, "stop_user_data_stream"):
+            try:
+                self.client.stop_user_data_stream()
+            except Exception:
+                pass
         if self._run_id is not None:
             self.db.stop_service_run(self._run_id, reason=reason)
         self.events.info(
@@ -236,6 +259,15 @@ class ClusterService:
             except Exception:  # noqa: BLE001
                 pass
             self._last_wal_checkpoint = time.time()
+
+        # 5. Periodic resource monitoring logging.
+        if (
+            self.config.resource_log_interval_seconds >= 0
+            and (time.time() - self._last_resource_log)
+            >= self.config.resource_log_interval_seconds
+        ):
+            self._log_resources()
+            self._last_resource_log = time.time()
 
     # ------------------------------------------------------------------
     # Internal
@@ -308,3 +340,50 @@ class ClusterService:
         bot = self.db.get_bot(bot_id)
         if bot is not None:
             self.runner.place_entry(bot, filters)
+
+    def _log_resources(self) -> None:
+        if psutil is None:
+            return
+        try:
+            proc_cpu = 0.0
+            proc_ram = 0.0
+            host_cpu = 0.0
+            host_ram = 0.0
+
+            try:
+                host_cpu = float(psutil.cpu_percent(interval=None))
+                vm = psutil.virtual_memory()
+                host_ram = float(vm.percent)
+            except Exception:
+                pass
+
+            if self._proc is not None:
+                try:
+                    proc_cpu = float(self._proc.cpu_percent(interval=None))
+                    proc_ram = float(self._proc.memory_info().rss / (1024.0 * 1024.0))
+                except Exception:
+                    pass
+
+            disk_used = 0.0
+            disk_free = 0.0
+            disk_pct = 0.0
+            try:
+                disk = psutil.disk_usage('.')
+                disk_used = float(disk.used / (1024.0 * 1024.0 * 1024.0))
+                disk_free = float(disk.free / (1024.0 * 1024.0 * 1024.0))
+                disk_pct = float(disk.percent)
+            except Exception:
+                pass
+
+            self.db.insert_resource_metric(
+                ts_ms=int(time.time() * 1000),
+                proc_cpu_pct=proc_cpu,
+                proc_ram_mb=proc_ram,
+                host_cpu_pct=host_cpu,
+                host_ram_pct=host_ram,
+                disk_used_gb=disk_used,
+                disk_free_gb=disk_free,
+                disk_pct=disk_pct,
+            )
+        except Exception:
+            pass

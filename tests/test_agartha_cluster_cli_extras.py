@@ -7,6 +7,7 @@ trial_to_run.json fallback path.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -303,3 +304,59 @@ def test_import_params_requires_symbol_and_study_or_batch(tmp_path):
         "import-params",
     ])
     assert rc == 2
+
+
+def test_report_resources_cli(tmp_path, capsys):
+    db_path = tmp_path / "cluster.db"
+    db = ClusterDB(str(db_path))
+    db.init_schema()
+
+    # Check behavior when no metrics exist
+    rc = cluster_cli.main([
+        "--db", str(db_path),
+        "--log-dir", str(tmp_path / "logs"),
+        "report-resources",
+        "--days", "1",
+    ])
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "No hay métricas registradas" in captured.out
+
+    # Insert fake metrics
+    db.insert_resource_metric(
+        ts_ms=int((time.time() - 3600) * 1000),
+        proc_cpu_pct=15.0,
+        proc_ram_mb=100.0,
+        host_cpu_pct=40.0,
+        host_ram_pct=50.0,
+        disk_used_gb=10.0,
+        disk_free_gb=100.0,
+        disk_pct=9.0,
+    )
+    db.insert_resource_metric(
+        ts_ms=int(time.time() * 1000),
+        proc_cpu_pct=25.0,
+        proc_ram_mb=200.0,
+        host_cpu_pct=60.0,
+        host_ram_pct=70.0,
+        disk_used_gb=12.0,
+        disk_free_gb=98.0,
+        disk_pct=11.0,
+    )
+    db.close()
+
+    rc2 = cluster_cli.main([
+        "--db", str(db_path),
+        "--log-dir", str(tmp_path / "logs"),
+        "report-resources",
+        "--days", "1",
+    ])
+    assert rc2 == 0
+    captured2 = capsys.readouterr()
+    # Check for basic table values and recommendation headers
+    assert "REPORTE DE CONSUMO DE RECURSOS" in captured2.out
+    assert "CPU Proceso (%)" in captured2.out
+    assert "CPU Host (%)" in captured2.out
+    assert "RAM Proceso (MB)" in captured2.out
+    assert "RAM Host (%)" in captured2.out
+    assert "DISEÑO Y RECOMENDACIÓN DE SERVICIO CLOUD" in captured2.out

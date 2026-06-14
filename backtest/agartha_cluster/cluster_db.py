@@ -977,3 +977,61 @@ class ClusterDB:
         return conn.execute(
             "SELECT * FROM credentials_meta WHERE profile = ?", (profile,)
         ).fetchone()
+
+    # ------------------------------------------------------------------
+    # Resource metrics
+    # ------------------------------------------------------------------
+    def insert_resource_metric(
+        self,
+        *,
+        ts_ms: int,
+        proc_cpu_pct: float,
+        proc_ram_mb: float,
+        host_cpu_pct: float,
+        host_ram_pct: float,
+        disk_used_gb: float,
+        disk_free_gb: float,
+        disk_pct: float,
+    ) -> int:
+        conn = self.connect()
+        cur = conn.execute(
+            """
+            INSERT INTO resource_metrics(
+                ts_ms, proc_cpu_pct, proc_ram_mb, host_cpu_pct, host_ram_pct,
+                disk_used_gb, disk_free_gb, disk_pct
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(ts_ms),
+                float(proc_cpu_pct),
+                float(proc_ram_mb),
+                float(host_cpu_pct),
+                float(host_ram_pct),
+                float(disk_used_gb),
+                float(disk_free_gb),
+                float(disk_pct),
+            ),
+        )
+        return int(cur.lastrowid)
+
+    def get_resource_metrics(
+        self,
+        *,
+        since_ms: Optional[int] = None,
+        limit: Optional[int] = None,
+    ) -> list[sqlite3.Row]:
+        conn = self.connect()
+        clauses: list[str] = []
+        params: list[Any] = []
+        if since_ms is not None:
+            clauses.append("ts_ms >= ?")
+            params.append(int(since_ms))
+        sql = "SELECT * FROM resource_metrics"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY ts_ms ASC"
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(int(limit))
+        return list(conn.execute(sql, params))
+

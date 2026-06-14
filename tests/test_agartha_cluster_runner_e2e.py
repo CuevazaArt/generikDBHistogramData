@@ -165,3 +165,22 @@ def test_manual_close_after_stall(setup):
     closed = runner.manual_close(bot, reason="supervisor_smoke")
     assert closed.state == BotState.MANUAL_CLOSED
     assert closed.notes == "supervisor_smoke"
+
+
+def test_resource_monitoring_logging_in_service(setup):
+    db, client, runner, service, sch = setup
+    service.config.resource_log_interval_seconds = 0.0
+
+    service.tick_once()
+
+    metrics = db.get_resource_metrics()
+    assert len(metrics) >= 1
+    m = metrics[0]
+    assert m["ts_ms"] > 0
+    assert m["proc_cpu_pct"] >= 0.0
+    assert m["proc_ram_mb"] >= 0.0
+    assert m["host_cpu_pct"] >= 0.0
+    assert m["host_ram_pct"] >= 0.0
+    assert m["disk_used_gb"] >= 0.0
+    assert m["disk_pct"] >= 0.0
+

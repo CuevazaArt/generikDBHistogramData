@@ -246,3 +246,25 @@ def test_credentials_meta_no_secret_persisted(db: ClusterDB):
     cols = [r[1] for r in conn.execute("PRAGMA table_info(credentials_meta)")]
     forbidden = {"api_key", "api_secret", "secret", "password", "token"}
     assert not (forbidden & set(cols))
+
+
+def test_resource_metrics_roundtrip(db: ClusterDB):
+    metric_id = db.insert_resource_metric(
+        ts_ms=1000,
+        proc_cpu_pct=15.5,
+        proc_ram_mb=120.0,
+        host_cpu_pct=45.0,
+        host_ram_pct=60.0,
+        disk_used_gb=30.0,
+        disk_free_gb=100.0,
+        disk_pct=23.0
+    )
+    assert metric_id > 0
+    rows = db.get_resource_metrics(since_ms=500)
+    assert len(rows) == 1
+    assert rows[0]["proc_cpu_pct"] == 15.5
+    assert rows[0]["disk_pct"] == 23.0
+
+    rows_empty = db.get_resource_metrics(since_ms=1500)
+    assert len(rows_empty) == 0
+
