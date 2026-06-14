@@ -34,7 +34,7 @@ from backtest.agartha_cluster.models import (
 from backtest.agartha_cluster.reconciler import Reconciler
 from backtest.agartha_cluster.scheduler import DeployScheduler
 
-CLUSTER_VERSION = "0.1.3"
+CLUSTER_VERSION = "0.1.4"
 
 
 @dataclass
