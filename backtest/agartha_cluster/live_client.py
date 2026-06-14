@@ -48,13 +48,13 @@ class PlaceOrderResult:
     """Standardised response shape across all backends."""
 
     accepted: bool
-    order_id: Optional[str]
+    order_id: str | None
     client_order_id: str
     status: str                        # 'NEW' | 'FILLED' | 'REJECTED' | ...
     avg_fill_price: float = 0.0
     filled_qty: float = 0.0
-    raw_response: Optional[str] = None
-    error: Optional[str] = None
+    raw_response: str | None = None
+    error: str | None = None
     weight_used: int = 0
     latency_ms: int = 0
 
@@ -64,7 +64,7 @@ class AccountSnapshot:
     timestamp_ms: int
     balances: dict[str, float]
     open_orders: list[dict]
-    raw: Optional[str] = None
+    raw: str | None = None
 
 
 class LiveClient(Protocol):
@@ -121,8 +121,8 @@ class StubLiveClient:
     def __init__(
         self,
         *,
-        seed: Optional[int] = None,
-        markets: Optional[dict[str, StubMarketState]] = None,
+        seed: int | None = None,
+        markets: dict[str, StubMarketState] | None = None,
         initial_quote_balance: float = 1000.0,
         auto_configure: bool = True,
         default_price: float = 1.0,
@@ -155,7 +155,7 @@ class StubLiveClient:
         price: float,
         trend: float = 0.0,
         volatility: float = 0.005,
-        filters: Optional[dict] = None,
+        filters: dict | None = None,
     ) -> None:
         self._markets[symbol.upper()] = StubMarketState(
             price=float(price), trend=float(trend), volatility=float(volatility)
@@ -364,6 +364,8 @@ class BinanceAlphaClient:
         self._ws_loop = None
         self._listen_key = None
         self._keepalive_task = None
+        self._price_cache: dict[str, float] = {}
+        self._price_cache_ts: float = 0.0
 
     def set_throttle(self, throttle) -> None:
         self.throttle = throttle
@@ -396,7 +398,7 @@ class BinanceAlphaClient:
         Does NOT retry on 400, 401, 403 (client/auth errors).
         Respects ``Retry-After`` header when present.
         """
-        last_exc: Optional[Exception] = None
+        last_exc: Exception | None = None
         for attempt in range(max_retries + 1):
             try:
                 r = fn()
@@ -508,14 +510,52 @@ class BinanceAlphaClient:
         }
 
     def get_price(self, symbol: str) -> float:
+        # If cache is fresh (< 4s) and contains the symbol, return from cache
+        if time.time() - self._price_cache_ts < 4.0 and symbol in self._price_cache:
+            return self._price_cache[symbol]
+
         url = f"{self.base_url}/api/v3/ticker/price"
+        try:
+            # Batch fetch all prices (weight = 2)
+            r = self._rest_with_retry(
+                lambda: requests.get(url, timeout=10),
+                label="get_price_batch",
+            )
+            self._reconcile_weight(r)
+            r.raise_for_status()
+
+            data = r.json()
+            if isinstance(data, list):
+                new_cache = {}
+                for item in data:
+                    s = item.get("symbol")
+                    p = item.get("price")
+                    if s and p is not None:
+                        new_cache[s] = float(p)
+                self._price_cache = new_cache
+                self._price_cache_ts = time.time()
+
+                if symbol in self._price_cache:
+                    return self._price_cache[symbol]
+        except Exception as e:
+            print(
+                f"[agartha][Warning] Batch price fetch failed: {e}. Falling back to single price fetch.",
+                file=sys.stderr,
+                flush=True,
+            )
+
+        # Fallback to single price query (weight = 1)
         r = self._rest_with_retry(
             lambda: requests.get(url, params={"symbol": symbol}, timeout=10),
-            label="get_price",
+            label="get_price_single",
         )
         self._reconcile_weight(r)
         r.raise_for_status()
-        return float(r.json()["price"])
+        price = float(r.json()["price"])
+
+        # Update cache with individual fetch
+        self._price_cache[symbol] = price
+        return price
 
     def place_limit(
         self,

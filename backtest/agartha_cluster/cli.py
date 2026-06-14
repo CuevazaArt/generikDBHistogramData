@@ -170,7 +170,7 @@ def _fetch_alpha_token_list_from_binance(
     return keep
 
 
-def _normalise_universe_row(token: dict) -> Optional[dict]:
+def _normalise_universe_row(token: dict) -> dict | None:
     """Map a token dict (from Binance or local JSON) to the universe row shape."""
     sym = token.get("symbol") or token.get("baseAsset")
     if not sym:
@@ -312,7 +312,7 @@ def cmd_import_params(args: argparse.Namespace) -> int:
                 f"be={sp.breakeven_lock_pct} off={sp.entry_limit_offset_pct} "
                 f"value={best.get('value')}"
             )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             print(f"  FAIL {symbol:<14} <- {study}  ({e})", file=sys.stderr)
             fail += 1
 
@@ -325,7 +325,7 @@ def _load_best_params(
     *,
     study: str,
     root: str,
-    storage_path: Optional[str],
+    storage_path: str | None,
 ) -> dict:
     """Return best_params dict.
 
@@ -429,6 +429,8 @@ def cmd_creds(args: argparse.Namespace) -> int:
 
 
 def cmd_live_up(args: argparse.Namespace) -> int:
+    import signal
+
     db = ClusterDB(args.db)
     db.init_schema()
     client = _build_client(args.dry_run, db)
@@ -440,6 +442,18 @@ def cmd_live_up(args: argparse.Namespace) -> int:
         mode="dry-run" if args.dry_run else "live",
         log_dir=args.log_dir,
     )
+
+    def handle_shutdown_signal(sig, frame):
+        print(
+            f"\n[agartha] Signal {sig} received. Requesting clean shutdown...",
+            file=sys.stderr,
+            flush=True,
+        )
+        service.request_stop()
+
+    signal.signal(signal.SIGINT, handle_shutdown_signal)
+    signal.signal(signal.SIGTERM, handle_shutdown_signal)
+
     service.start()
     try:
         if args.ticks:
@@ -751,7 +765,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     return int(args.func(args))

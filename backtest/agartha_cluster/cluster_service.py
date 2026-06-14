@@ -63,7 +63,7 @@ class ClusterService:
         scheduler: DeployScheduler,
         runner: BotRunner,
         reconciler: Reconciler,
-        config: Optional[ServiceConfig] = None,
+        config: ServiceConfig | None = None,
     ):
         self.db = db
         self.client = client
@@ -89,7 +89,7 @@ class ClusterService:
                 self._proc.cpu_percent(interval=None)
             except Exception:
                 pass
-        self._run_id: Optional[int] = None
+        self._run_id: int | None = None
         # Wire the reconciler to the runner's on_fill so missed fills
         # discovered by the periodic poll can be replayed idempotently.
         if getattr(self.reconciler, "_on_fill", None) is None:
@@ -185,8 +185,13 @@ class ClusterService:
         # 3. Durably persist recovery writes via a WAL checkpoint.
         try:
             self.db.wal_checkpoint(mode="TRUNCATE")
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as e:
+            import sys
+            print(
+                f"[agartha][Error] Recovery WAL checkpoint failed: {e}",
+                file=sys.stderr,
+                flush=True,
+            )
 
         self.events.info(
             kind=EventKind.SERVICE_RECOVERY_COMPLETED,
@@ -200,8 +205,13 @@ class ClusterService:
         if hasattr(self.client, "stop_user_data_stream"):
             try:
                 self.client.stop_user_data_stream()
-            except Exception:
-                pass
+            except Exception as e:
+                import sys
+                print(
+                    f"[agartha][Error] stop_user_data_stream failed: {e}",
+                    file=sys.stderr,
+                    flush=True,
+                )
         if self._run_id is not None:
             self.db.stop_service_run(self._run_id, reason=reason)
         self.events.info(
@@ -256,7 +266,7 @@ class ClusterService:
         ):
             try:
                 self.db.wal_checkpoint(mode="TRUNCATE")
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             self._last_wal_checkpoint = time.time()
 
