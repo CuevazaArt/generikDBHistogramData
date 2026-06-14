@@ -38,7 +38,7 @@ class ThrottleConfig:
 class ApiThrottle:
     """Per-process rate limiter backed by ``api_throttle_buckets``."""
 
-    def __init__(self, db: ClusterDB, config: Optional[ThrottleConfig] = None):
+    def __init__(self, db: ClusterDB, config: ThrottleConfig | None = None):
         self.db = db
         self.config = config or ThrottleConfig()
         # Rolling 10s window for orders (in-memory; persisted to DB for forensics).
@@ -47,7 +47,7 @@ class ApiThrottle:
     # ------------------------------------------------------------------
     # Accounting
     # ------------------------------------------------------------------
-    def record(self, *, weight: int, orders: int = 0, ts_ms: Optional[int] = None) -> tuple[int, int]:
+    def record(self, *, weight: int, orders: int = 0, ts_ms: int | None = None) -> tuple[int, int]:
         """Persist used weight/orders into the current minute bucket and
         update the in-memory order window. Returns the post-update tuple
         ``(weight_used_in_minute, orders_in_last_10s)``."""
@@ -62,7 +62,7 @@ class ApiThrottle:
         self._order_ts = [t for t in self._order_ts if t >= cutoff]
         return (weight_used, len(self._order_ts))
 
-    def used(self, *, ts_ms: Optional[int] = None) -> tuple[int, int]:
+    def used(self, *, ts_ms: int | None = None) -> tuple[int, int]:
         ts_ms = int(ts_ms if ts_ms is not None else _now_ms())
         bucket = _minute_bucket(ts_ms)
         weight_used, _ = self.db.get_throttle_bucket(bucket)
@@ -70,7 +70,7 @@ class ApiThrottle:
         order_count = sum(1 for t in self._order_ts if t >= cutoff)
         return (weight_used, order_count)
 
-    def can_send(self, *, weight: int, orders: int = 0, ts_ms: Optional[int] = None) -> bool:
+    def can_send(self, *, weight: int, orders: int = 0, ts_ms: int | None = None) -> bool:
         weight_used, order_count = self.used(ts_ms=ts_ms)
         if weight_used + weight > self.config.weight_limit_per_minute:
             return False
@@ -125,7 +125,7 @@ class ApiThrottle:
     # ------------------------------------------------------------------
     # Server reconciliation
     # ------------------------------------------------------------------
-    def reconcile_server_weight(self, *, used_weight_1m: int, ts_ms: Optional[int] = None) -> None:
+    def reconcile_server_weight(self, *, used_weight_1m: int, ts_ms: int | None = None) -> None:
         """Snap the local minute bucket to the server's reported usage.
 
         Useful right after every signed REST response (header

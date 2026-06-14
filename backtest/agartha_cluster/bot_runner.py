@@ -94,7 +94,7 @@ class BotRunner:
         client: LiveClient,
         throttle: ApiThrottle,
         events: EventLogger,
-        config: Optional[RunnerConfig] = None,
+        config: RunnerConfig | None = None,
     ):
         self.db = db
         self.client = client
@@ -109,7 +109,7 @@ class BotRunner:
         params = SymbolParams(**{
             "symbol": bot.symbol,
             **json.loads(bot.params_snapshot_json),
-        }) if False else None  # noqa: F841 - placeholder for clarity
+        }) if False else None
 
         runtime = json.loads(bot.params_snapshot_json)
         entry_offset_pct = float(runtime.get("entry_limit_offset_pct", 0.0) or 0.0)
@@ -484,10 +484,10 @@ class BotRunner:
         price: float,
         qty: float,
         fee: float = 0.0,
-        fee_asset: Optional[str] = None,
-        ts_ms: Optional[int] = None,
-        exchange_fill_id: Optional[str] = None,
-        raw_payload: Optional[str] = None,
+        fee_asset: str | None = None,
+        ts_ms: int | None = None,
+        exchange_fill_id: str | None = None,
+        raw_payload: str | None = None,
     ) -> None:
         ts_ms = int(ts_ms if ts_ms is not None else _now_ms())
         row = self.db.get_order_by_client_id(client_order_id)
@@ -600,7 +600,7 @@ class BotRunner:
         bot: BotRecord,
         target: BotState,
         *,
-        reason: Optional[str] = None,
+        reason: str | None = None,
     ) -> None:
         new_state = transition(bot.state, target, reason=reason)
         if new_state == bot.state:

@@ -48,10 +48,10 @@ from backtest.engine import run_backtest as _py_run_backtest
 from backtest.strategy_base import StrategyBase
 
 __all__ = [
-    "run_backtest",
-    "is_rust_available",
-    "EngineConfig",
     "BacktestResult",
+    "EngineConfig",
+    "is_rust_available",
+    "run_backtest",
 ]
 
 
@@ -112,10 +112,10 @@ def _engine_config_to_dict(cfg: EngineConfig) -> Dict[str, Any]:
 def _run_rust(
     config: EngineConfig,
     strategy_cls: Type[StrategyBase],
-    strategy_params: Optional[Dict[str, Any]],
-    run_id: Optional[int],
-    trial_id: Optional[int],
-    candles: Optional[List[Dict[str, Any]]],
+    strategy_params: Dict[str, Any] | None,
+    run_id: int | None,
+    trial_id: int | None,
+    candles: List[Dict[str, Any]] | None,
 ) -> BacktestResult:
     """Rust dispatch path.
 
@@ -184,10 +184,10 @@ def _run_rust(
 def run_backtest(
     config: EngineConfig,
     strategy_cls: Type[StrategyBase],
-    strategy_params: Optional[Dict[str, Any]] = None,
-    run_id: Optional[int] = None,
-    trial_id: Optional[int] = None,
-    candles: Optional[List[Dict[str, Any]]] = None,
+    strategy_params: Dict[str, Any] | None = None,
+    run_id: int | None = None,
+    trial_id: int | None = None,
+    candles: List[Dict[str, Any]] | None = None,
 ) -> BacktestResult:
     """Execute a backtest, preferring the Rust core when available.
 

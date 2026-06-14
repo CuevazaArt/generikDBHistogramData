@@ -13,7 +13,7 @@ import pytest
 # crash.
 os.environ.setdefault("MPLBACKEND", "Agg")
 try:
-    import matplotlib  # noqa: E402
+    import matplotlib
 
     matplotlib.use("Agg", force=True)
 except ImportError:  # pragma: no cover - matplotlib is optional for ci skip
@@ -23,8 +23,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from backtest import plots  # noqa: E402
-from backtest.storage_paths import StoragePaths, tmp_then_rename  # noqa: E402
+from backtest import plots
+from backtest.storage_paths import StoragePaths, tmp_then_rename
 
 
 def _write_equity_parquet(target: str, rows: Iterable[Mapping[str, object]]) -> None:

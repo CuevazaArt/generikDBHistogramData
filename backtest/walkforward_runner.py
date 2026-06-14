@@ -134,7 +134,7 @@ class _FoldJob:
     engine_config: EngineConfig
     db_path: str
     optimize_per_fold: bool
-    optimization_kwargs: Optional[Dict[str, Any]]
+    optimization_kwargs: Dict[str, Any] | None
 
 
 def _run_optuna_for_fold(
@@ -142,7 +142,7 @@ def _run_optuna_for_fold(
     strategy_name: str,
     train_cfg: EngineConfig,
     db_path: str,
-    optimization_kwargs: Optional[Dict[str, Any]],
+    optimization_kwargs: Dict[str, Any] | None,
 ) -> Dict[str, Any]:
     """Lazy-import optimize_strategy so the module loads without optuna."""
     from backtest.optimize import optimize_strategy  # local import
@@ -223,9 +223,9 @@ def run_walk_forward(
     db_path: str,
     *,
     optimize_per_fold: bool = False,
-    optimization_kwargs: Optional[Dict[str, Any]] = None,
-    orchestrator: Optional[Any] = None,
-    progress_cb: Optional[Callable[[Dict[str, Any]], None]] = None,
+    optimization_kwargs: Dict[str, Any] | None = None,
+    orchestrator: Any | None = None,
+    progress_cb: Callable[[Dict[str, Any]], None] | None = None,
 ) -> WalkForwardResult:
     """Run all folds in ``cfg`` and aggregate the resulting metrics.
 
@@ -290,9 +290,9 @@ def run_walk_forward(
 
 
 __all__ = [
-    "WalkForwardWindow",
     "WalkForwardConfig",
     "WalkForwardResult",
+    "WalkForwardWindow",
     "build_windows",
     "run_walk_forward",
 ]

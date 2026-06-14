@@ -171,7 +171,7 @@ def _safe_segment(name: str) -> str:
     return s
 
 
-def _ensure_manifest(target_dir: str, *, title: str, kind: str, extra_lines: Optional[list[str]] = None) -> str:
+def _ensure_manifest(target_dir: str, *, title: str, kind: str, extra_lines: list[str] | None = None) -> str:
     """Drop a minimal MANIFEST.md if none exists, so directives are met from t=0."""
     path = os.path.join(target_dir, "MANIFEST.md")
     if os.path.exists(path):
@@ -211,7 +211,7 @@ def write_manifest(
     title: str,
     summary: str,
     kind: str = "Entregable generado por el tester",
-    extra_lines: Optional[list[str]] = None,
+    extra_lines: list[str] | None = None,
 ) -> str:
     """Public entry point to seed/refresh a MANIFEST.md.
 
@@ -242,15 +242,15 @@ def write_manifest(
 
 
 __all__ = [
+    "DATASETS_BUCKET",
     "ENTREGABLES_DIRNAME",
     "RUNS_BUCKET",
-    "STUDIES_BUCKET",
     "STRICT_BUCKET",
-    "DATASETS_BUCKET",
+    "STUDIES_BUCKET",
+    "dataset_report_dir",
     "entregables_root",
     "run_report_dir",
-    "study_report_dir",
     "strict_report_dir",
-    "dataset_report_dir",
+    "study_report_dir",
     "write_manifest",
 ]

@@ -18,9 +18,9 @@ def ensure_dir(path: str) -> None:
 
 
 def _resolve_equity_rows(
-    eq_rows: Optional[List[Tuple]],
+    eq_rows: List[Tuple] | None,
     *,
-    run_id: Optional[int] = None,
+    run_id: int | None = None,
     data_root: str = "data",
 ) -> List[Tuple]:
     """Return the populated equity rows, falling back to Parquet when empty.
@@ -48,7 +48,7 @@ def _resolve_equity_rows(
         return []
 
 
-def _select_backend(run_id: int, data_root: str, db_path: Optional[str]) -> str:
+def _select_backend(run_id: int, data_root: str, db_path: str | None) -> str:
     """Choose ``duckdb`` when Parquet artefacts exist; otherwise ``sqlite``.
 
     Used by :func:`render_run_dashboard`. The decision is purely capability
@@ -150,7 +150,7 @@ def plot_equity_and_drawdown(
     equity_rows: List[Tuple],
     output_dir: str,
     run_id: int,
-    max_plot_points: Optional[int] = None,
+    max_plot_points: int | None = None,
 ) -> Dict[str, str]:
     if plt is None:
         raise RuntimeError("Matplotlib is not installed. Run: pip install -r requirements.txt")
@@ -799,7 +799,7 @@ def render_run_dashboard(
     *,
     data_root: str = "data",
     backend: str = "auto",
-    db_path: Optional[str] = None,
+    db_path: str | None = None,
 ) -> Dict[str, str]:
     """Render the full report bundle for a single run.
 

@@ -26,12 +26,12 @@ def create_run(
     strategy_name: str,
     symbol: str,
     interval: str,
-    start_ts: Optional[int],
-    end_ts: Optional[int],
+    start_ts: int | None,
+    end_ts: int | None,
     initial_cash: float,
     fee_rate: float,
     slippage_bps: float,
-    config: Optional[Dict[str, Any]] = None,
+    config: Dict[str, Any] | None = None,
 ) -> int:
     return create_bt_run(
         db_path,
@@ -64,8 +64,8 @@ def persist_run_metrics(
     db_path: str,
     run_id: int,
     metrics: Dict[str, float],
-    trial_id: Optional[int] = None,
-    extra: Optional[Dict[str, Any]] = None,
+    trial_id: int | None = None,
+    extra: Dict[str, Any] | None = None,
 ) -> None:
     upsert_bt_metrics(
         db_path,
@@ -93,11 +93,11 @@ def save_trial(
     study_name: str,
     trial_number: int,
     state: str,
-    objective: Optional[float],
+    objective: float | None,
     params: Dict[str, Any],
     started_at: str,
-    finished_at: Optional[str],
-    duration_sec: Optional[float],
+    finished_at: str | None,
+    duration_sec: float | None,
 ) -> int:
     return create_bt_trial(
         db_path,
@@ -132,7 +132,7 @@ def run_signal_events(db_path: str, run_id: int) -> List[Tuple]:
     return get_bt_signal_events(db_path, run_id=run_id)
 
 
-def run_descriptor(db_path: str, run_id: int) -> Optional[Dict[str, Any]]:
+def run_descriptor(db_path: str, run_id: int) -> Dict[str, Any] | None:
     return get_bt_run_descriptor(db_path, run_id=run_id)
 
 

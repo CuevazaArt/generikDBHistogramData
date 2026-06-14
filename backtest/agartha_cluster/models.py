@@ -147,11 +147,11 @@ class SymbolParams:
     partial_tp_pct: float = 0.0
     partial_tp_size_pct: float = 0.0
     max_holding_bars: int = 0
-    study_equity_pct: Optional[float] = None
-    study_max_dd_pct: Optional[float] = None
-    study_trial_id: Optional[str] = None
-    optimized_at: Optional[str] = None
-    optuna_db_path: Optional[str] = None
+    study_equity_pct: float | None = None
+    study_max_dd_pct: float | None = None
+    study_trial_id: str | None = None
+    optimized_at: str | None = None
+    optuna_db_path: str | None = None
 
     def as_runtime_dict(self) -> dict[str, Any]:
         return {
@@ -177,7 +177,7 @@ class SymbolFilters:
     bid_multiplier_down: float = 0.2
     ask_multiplier_up: float = 5.0
     ask_multiplier_down: float = 0.2
-    refreshed_at: Optional[str] = None
+    refreshed_at: str | None = None
 
 
 @dataclass
@@ -190,27 +190,27 @@ class BotRecord:
     capital_usdt: float
     params_snapshot_json: str
     correlation_id: str
-    entry_order_id: Optional[str] = None
-    entry_client_order_id: Optional[str] = None
-    entry_price: Optional[float] = None
-    entry_qty: Optional[float] = None
-    entry_filled_ts: Optional[int] = None
-    peak_price: Optional[float] = None
-    trail_floor: Optional[float] = None
-    exit_order_id: Optional[str] = None
-    exit_client_order_id: Optional[str] = None
-    exit_price: Optional[float] = None
-    exit_qty: Optional[float] = None
-    exit_filled_ts: Optional[int] = None
-    realized_pnl_usdt: Optional[float] = None
-    deployed_at: Optional[str] = None
-    closed_at: Optional[str] = None
-    notes: Optional[str] = None
+    entry_order_id: str | None = None
+    entry_client_order_id: str | None = None
+    entry_price: float | None = None
+    entry_qty: float | None = None
+    entry_filled_ts: int | None = None
+    peak_price: float | None = None
+    trail_floor: float | None = None
+    exit_order_id: str | None = None
+    exit_client_order_id: str | None = None
+    exit_price: float | None = None
+    exit_qty: float | None = None
+    exit_filled_ts: int | None = None
+    realized_pnl_usdt: float | None = None
+    deployed_at: str | None = None
+    closed_at: str | None = None
+    notes: str | None = None
 
 
 @dataclass
 class OrderRecord:
-    order_id: Optional[str]
+    order_id: str | None
     client_order_id: str
     bot_id: int
     symbol: str
@@ -221,10 +221,10 @@ class OrderRecord:
     qty: float
     filled_qty: float = 0.0
     avg_fill_price: float = 0.0
-    submitted_ts: Optional[int] = None
-    last_update_ts: Optional[int] = None
+    submitted_ts: int | None = None
+    last_update_ts: int | None = None
     correlation_id: str = ""
-    raw_response: Optional[str] = None
+    raw_response: str | None = None
 
 
 @dataclass
@@ -233,7 +233,7 @@ class Event:
     source: EventSource
     level: EventLevel
     kind: EventKind
-    bot_id: Optional[int] = None
-    symbol: Optional[str] = None
-    correlation_id: Optional[str] = None
+    bot_id: int | None = None
+    symbol: str | None = None
+    correlation_id: str | None = None
     payload: dict = field(default_factory=dict)

@@ -6,7 +6,7 @@ from typing import List, Tuple, Optional
 from db import query_klines
 
 
-def query(path: str, symbol: str, interval: str, start_ts: Optional[int] = None, end_ts: Optional[int] = None, limit: Optional[int] = None) -> List[Tuple]:
+def query(path: str, symbol: str, interval: str, start_ts: int | None = None, end_ts: int | None = None, limit: int | None = None) -> List[Tuple]:
     return query_klines(path, symbol, interval, start_ts=start_ts, end_ts=end_ts, limit=limit)
 
 

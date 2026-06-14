@@ -11,7 +11,7 @@ import pytest
 
 os.environ.setdefault("MPLBACKEND", "Agg")
 try:
-    import matplotlib  # noqa: E402
+    import matplotlib
 
     matplotlib.use("Agg", force=True)
 except ImportError:  # pragma: no cover
@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from backtest.plots import _downsample_equity_rows  # noqa: E402
+from backtest.plots import _downsample_equity_rows
 
 
 def _linear_rows(n: int) -> List[Tuple[int, int, float]]:

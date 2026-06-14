@@ -88,7 +88,7 @@ def prepare_dataset_artifact(
     start_ts: int,
     end_ts: int,
     output_base: str = "reports",
-    artifact_name: Optional[str] = None,
+    artifact_name: str | None = None,
     cache_root: str = CACHE_ROOT_DEFAULT,
     prefer_parquet_cache: bool = True,
     overwrite_cache: bool = False,

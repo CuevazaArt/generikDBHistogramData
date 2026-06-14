@@ -55,15 +55,15 @@ class BinanceDownloader:
         "TUSD",
     )
 
-    def __init__(self, session: Optional[requests.Session] = None):
+    def __init__(self, session: requests.Session | None = None):
         self.s = session or requests.Session()
 
     def download_klines_api(
         self,
         symbol: str,
         interval: str,
-        start_ts: Optional[int] = None,
-        end_ts: Optional[int] = None,
+        start_ts: int | None = None,
+        end_ts: int | None = None,
         limit: int = 1000,
         sleep_on_rate_limit: float = 0.5,
         max_retries: int = 6,
@@ -327,8 +327,8 @@ class BinanceDownloader:
         self,
         symbol: str,
         interval: str,
-        start_ts: Optional[int] = None,
-        end_ts: Optional[int] = None,
+        start_ts: int | None = None,
+        end_ts: int | None = None,
         limit: int = 1000,
         sleep_on_rate_limit: float = 0.5,
         max_retries: int = 6,
@@ -355,8 +355,8 @@ class BinanceDownloader:
 
         while True:
             attempt = 0
-            payload: Optional[Dict[str, Any]] = None
-            last_error: Optional[str] = None
+            payload: Dict[str, Any] | None = None
+            last_error: str | None = None
             while attempt <= max_retries:
                 try:
                     r = self.s.get(url, params=params, timeout=request_timeout)

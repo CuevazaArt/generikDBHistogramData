@@ -3,8 +3,8 @@ from math import sqrt
 from typing import Dict, List, Optional
 
 
-def _rolling_sma(values: List[float], period: int) -> List[Optional[float]]:
-    out: List[Optional[float]] = [None] * len(values)
+def _rolling_sma(values: List[float], period: int) -> List[float | None]:
+    out: List[float | None] = [None] * len(values)
     if period <= 0:
         return out
     s = 0.0
@@ -17,12 +17,12 @@ def _rolling_sma(values: List[float], period: int) -> List[Optional[float]]:
     return out
 
 
-def _rolling_ema(values: List[float], period: int) -> List[Optional[float]]:
-    out: List[Optional[float]] = [None] * len(values)
+def _rolling_ema(values: List[float], period: int) -> List[float | None]:
+    out: List[float | None] = [None] * len(values)
     if period <= 0 or not values:
         return out
     alpha = 2.0 / (period + 1.0)
-    ema: Optional[float] = None
+    ema: float | None = None
     for i, v in enumerate(values):
         if ema is None:
             ema = v
@@ -33,8 +33,8 @@ def _rolling_ema(values: List[float], period: int) -> List[Optional[float]]:
     return out
 
 
-def _rsi(values: List[float], period: int) -> List[Optional[float]]:
-    out: List[Optional[float]] = [None] * len(values)
+def _rsi(values: List[float], period: int) -> List[float | None]:
+    out: List[float | None] = [None] * len(values)
     if period <= 0 or len(values) <= period:
         return out
     gains = []
@@ -63,8 +63,8 @@ def _rsi(values: List[float], period: int) -> List[Optional[float]]:
     return out
 
 
-def _atr(highs: List[float], lows: List[float], closes: List[float], period: int) -> List[Optional[float]]:
-    out: List[Optional[float]] = [None] * len(highs)
+def _atr(highs: List[float], lows: List[float], closes: List[float], period: int) -> List[float | None]:
+    out: List[float | None] = [None] * len(highs)
     if period <= 0 or len(highs) < 2:
         return out
     trs = [0.0]

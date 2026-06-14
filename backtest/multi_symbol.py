@@ -21,8 +21,8 @@ from backtest.runner import execute_and_persist
 class MultiSymbolConfig:
     symbols: List[str]
     interval: str
-    start_ts: Optional[int]
-    end_ts: Optional[int]
+    start_ts: int | None
+    end_ts: int | None
     initial_cash_per_symbol: float
     share_cash_pool: bool = False
 
@@ -51,8 +51,8 @@ class MultiSymbolResult:
 class _SymbolJob:
     symbol: str
     interval: str
-    start_ts: Optional[int]
-    end_ts: Optional[int]
+    start_ts: int | None
+    end_ts: int | None
     initial_cash: float
     strategy_name: str
     strategy_params: Dict[str, Any]
@@ -95,8 +95,8 @@ def run_multi_symbol(
     engine_config: EngineConfig,
     db_path: str,
     *,
-    orchestrator: Optional[Any] = None,
-    progress_cb: Optional[Callable[[Dict[str, Any]], None]] = None,
+    orchestrator: Any | None = None,
+    progress_cb: Callable[[Dict[str, Any]], None] | None = None,
 ) -> MultiSymbolResult:
     """Run ``strategy_name`` over each symbol in ``cfg`` and aggregate metrics."""
     if cfg.share_cash_pool:

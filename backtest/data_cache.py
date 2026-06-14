@@ -126,7 +126,7 @@ def read_window(
     start_ts: int,
     end_ts: int,
     cache_root: str = CACHE_ROOT_DEFAULT,
-) -> Optional[List[Tuple]]:
+) -> List[Tuple] | None:
     """Read a window from the Parquet cache. Returns None if not available."""
     if not is_available():
         return None

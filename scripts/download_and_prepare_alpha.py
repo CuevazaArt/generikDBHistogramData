@@ -66,7 +66,7 @@ def _resolve_alpha_metadata(dl: BinanceDownloader, base: str) -> dict:
     return cands[0]
 
 
-def _window_in_db(db_path: str, symbol: str, interval: str) -> Tuple[Optional[int], Optional[int], int]:
+def _window_in_db(db_path: str, symbol: str, interval: str) -> Tuple[int | None, int | None, int]:
     c = sqlite3.connect(db_path)
     try:
         row = c.execute(

@@ -28,7 +28,7 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 def is_available() -> bool:
     """Return ``True`` iff ``import duckdb`` works in this interpreter."""
     try:
-        import duckdb  # noqa: F401
+        import duckdb
     except ImportError:
         return False
     return True
@@ -90,7 +90,7 @@ def has_equity_parquet(run_id: int, data_root: str = "data") -> bool:
 
 def equity_curve_from_parquet(
     run_id: int, data_root: str = "data"
-) -> List[Tuple[int, Optional[int], float]]:
+) -> List[Tuple[int, int | None, float]]:
     """Equity curve as ``[(seq, event_time, equity), ...]`` ordered by seq.
 
     Matches the shape of ``backtest.storage.run_equity_curve``. Prefers
@@ -129,7 +129,7 @@ def equity_curve_from_parquet(
 
 def signal_events_from_parquet(
     run_id: int, data_root: str = "data"
-) -> List[Tuple[int, Optional[int], Optional[str], Optional[str], Optional[float], Optional[float], Optional[str]]]:
+) -> List[Tuple[int, int | None, str | None, str | None, float | None, float | None, str | None]]:
     """Signal events shaped like ``backtest.storage.run_signal_events``.
 
     Returns ``[(seq, event_time, event_type, side, price, qty, payload_json)]``
@@ -165,7 +165,7 @@ def signal_events_from_parquet(
 
 def run_events_from_parquet(
     run_id: int, data_root: str = "data"
-) -> List[Tuple[int, Optional[int], Optional[str], Optional[str], Optional[float], Optional[float], Optional[str]]]:
+) -> List[Tuple[int, int | None, str | None, str | None, float | None, float | None, str | None]]:
     """Full event stream shaped like ``backtest.storage.run_events``.
 
     Returns ``[(seq, event_time, event_type, side, cash, equity, payload_json)]``
@@ -200,7 +200,7 @@ def run_events_from_parquet(
 
 def trial_objectives_from_parquet(
     study_name: str, data_root: str = "data"
-) -> Optional[List[Tuple[int, float]]]:
+) -> List[Tuple[int, float]] | None:
     """Return ``[(trial_number, objective), ...]`` if a Parquet store exists.
 
     Optuna trial state lives in PostgreSQL or SQLite, not Parquet. The hook
@@ -281,13 +281,13 @@ def monthly_returns_aggregate(
 
 
 __all__ = [
-    "is_available",
-    "open_connection",
-    "has_events_parquet",
-    "has_equity_parquet",
     "equity_curve_from_parquet",
-    "signal_events_from_parquet",
-    "run_events_from_parquet",
-    "trial_objectives_from_parquet",
+    "has_equity_parquet",
+    "has_events_parquet",
+    "is_available",
     "monthly_returns_aggregate",
+    "open_connection",
+    "run_events_from_parquet",
+    "signal_events_from_parquet",
+    "trial_objectives_from_parquet",
 ]

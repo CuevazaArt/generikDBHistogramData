@@ -64,7 +64,7 @@ class TelemetryRecorder:
         self._samples: List[Dict[str, Any]] = []
         self._t0 = time.monotonic()
 
-    def _snapshot(self, phase: str, extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def _snapshot(self, phase: str, extra: Dict[str, Any] | None = None) -> Dict[str, Any]:
         snap: Dict[str, Any] = {
             "timestamp": _utc_now_iso(),
             "phase": phase,
@@ -94,7 +94,7 @@ class TelemetryRecorder:
             snap.update(extra)
         return snap
 
-    def sample(self, phase: str, extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def sample(self, phase: str, extra: Dict[str, Any] | None = None) -> Dict[str, Any]:
         if self._closed:
             return {}
         snap = self._snapshot(phase=phase, extra=extra)

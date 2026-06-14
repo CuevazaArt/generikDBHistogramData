@@ -28,7 +28,7 @@ from backtest.registry import get_strategy
 from backtest.runner import execute_and_persist
 
 
-def _window_for_symbol(db: str, sym: str, interval: str) -> Optional[Tuple[int, int, int]]:
+def _window_for_symbol(db: str, sym: str, interval: str) -> Tuple[int, int, int] | None:
     c = sqlite3.connect(db)
     try:
         row = c.execute(
@@ -42,7 +42,7 @@ def _window_for_symbol(db: str, sym: str, interval: str) -> Optional[Tuple[int, 
     return int(row[0]), int(row[1]), int(row[2])
 
 
-def _best_params_from_study(study_dir: Path) -> Optional[Dict]:
+def _best_params_from_study(study_dir: Path) -> Dict | None:
     """Read trial_to_run.json best_params."""
     p = study_dir / "trial_to_run.json"
     if not p.exists():
@@ -70,7 +70,7 @@ def _run_optuna_train(symbol: str, interval: str, start_ts: int, end_ts: int,
 
 
 def _run_oos_backtest(symbol: str, interval: str, start_ts: int, end_ts: int,
-                      params: Dict, initial_cash: float = 10.0) -> Optional[float]:
+                      params: Dict, initial_cash: float = 10.0) -> float | None:
     """Returns total_return (fraction) on OOS window."""
     strategy_cls = get_strategy("agartha")
     cfg = EngineConfig(

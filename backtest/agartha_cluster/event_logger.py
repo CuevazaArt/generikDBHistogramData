@@ -32,12 +32,12 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
-def _utc_day(ms: Optional[int] = None) -> str:
+def _utc_day(ms: int | None = None) -> str:
     ts = (ms / 1000.0) if ms is not None else time.time()
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
 
 
-def _utc_iso(ms: Optional[int] = None) -> str:
+def _utc_iso(ms: int | None = None) -> str:
     ts = (ms / 1000.0) if ms is not None else time.time()
     return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
 
@@ -77,11 +77,11 @@ class EventLogger:
         kind: EventKind,
         source: EventSource,
         level: EventLevel = EventLevel.INFO,
-        bot_id: Optional[int] = None,
-        symbol: Optional[str] = None,
-        correlation_id: Optional[str] = None,
-        payload: Optional[dict[str, Any]] = None,
-        ts_ms: Optional[int] = None,
+        bot_id: int | None = None,
+        symbol: str | None = None,
+        correlation_id: str | None = None,
+        payload: dict[str, Any] | None = None,
+        ts_ms: int | None = None,
     ) -> int:
         ts_ms = int(ts_ms if ts_ms is not None else _now_ms())
         event = Event(

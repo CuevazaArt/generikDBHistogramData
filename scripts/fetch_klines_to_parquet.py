@@ -31,8 +31,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from binance_hist_downloader import BinanceDownloader  # noqa: E402
-from backtest.storage_paths import StoragePaths, tmp_then_rename  # noqa: E402
+from binance_hist_downloader import BinanceDownloader
+from backtest.storage_paths import StoragePaths, tmp_then_rename
 
 
 FETCHER_VERSION = "0.1.0"
@@ -96,8 +96,8 @@ def _write_manifest(
     year: int,
     month: int,
     row_count: int,
-    min_open_time: Optional[int],
-    max_open_time: Optional[int],
+    min_open_time: int | None,
+    max_open_time: int | None,
 ) -> str:
     manifest_path = os.path.join(target_dir, "_manifest.json")
     payload = {
@@ -138,8 +138,8 @@ def _fetch_one_month(
     os.makedirs(target_dir, exist_ok=True)
 
     rows_written = 0
-    min_open_time: Optional[int] = None
-    max_open_time: Optional[int] = None
+    min_open_time: int | None = None
+    max_open_time: int | None = None
     batch = _empty_batch()
     try:
         with tmp_then_rename(target) as tmp_path:
@@ -187,7 +187,7 @@ def _fetch_one_month(
     return ("ok", rows_written, target)
 
 
-def _months_to_fetch(month_arg: Optional[int]) -> Iterable[int]:
+def _months_to_fetch(month_arg: int | None) -> Iterable[int]:
     if month_arg is None:
         return range(1, 13)
     if not (1 <= int(month_arg) <= 12):

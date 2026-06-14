@@ -38,15 +38,15 @@ _WORKER_BASE_RAM_BYTES = 250 * 1024 * 1024  # ~250 MB per Python worker baseline
 @dataclass
 class ResourceProfile:
     cpu_count: int
-    ram_total_bytes: Optional[int]
-    ram_available_bytes: Optional[int]
+    ram_total_bytes: int | None
+    ram_available_bytes: int | None
 
-    def ram_total_gb(self) -> Optional[float]:
+    def ram_total_gb(self) -> float | None:
         if self.ram_total_bytes is None:
             return None
         return round(self.ram_total_bytes / (1024 ** 3), 2)
 
-    def ram_available_gb(self) -> Optional[float]:
+    def ram_available_gb(self) -> float | None:
         if self.ram_available_bytes is None:
             return None
         return round(self.ram_available_bytes / (1024 ** 3), 2)
@@ -64,7 +64,7 @@ def detect_resources() -> ResourceProfile:
     )
 
 
-def estimate_worker_ram_bytes(dataset_candles: Optional[int]) -> int:
+def estimate_worker_ram_bytes(dataset_candles: int | None) -> int:
     """Estimate the RAM cost of a single worker for a given dataset size."""
     if not dataset_candles or dataset_candles <= 0:
         return _WORKER_BASE_RAM_BYTES
@@ -73,9 +73,9 @@ def estimate_worker_ram_bytes(dataset_candles: Optional[int]) -> int:
 
 def recommend_n_jobs(
     mode: str = "adaptive_80",
-    dataset_candles: Optional[int] = None,
-    profile: Optional[ResourceProfile] = None,
-    explicit_cap: Optional[int] = None,
+    dataset_candles: int | None = None,
+    profile: ResourceProfile | None = None,
+    explicit_cap: int | None = None,
 ) -> int:
     """Return a safe worker count for `mode`, bounded by available CPU/RAM.
 
@@ -108,9 +108,9 @@ def recommend_n_jobs(
 
 def explain_recommendation(
     mode: str = "adaptive_80",
-    dataset_candles: Optional[int] = None,
-    profile: Optional[ResourceProfile] = None,
-    explicit_cap: Optional[int] = None,
+    dataset_candles: int | None = None,
+    profile: ResourceProfile | None = None,
+    explicit_cap: int | None = None,
 ) -> str:
     """Human-friendly explanation of how `n_jobs` was decided."""
     prof = profile or detect_resources()

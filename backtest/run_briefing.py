@@ -44,12 +44,12 @@ def build_run_briefing_payload(
     strategy_params: Mapping[str, Any],
     engine: Mapping[str, Any],
     execution: Mapping[str, Any],
-    optimization: Optional[Mapping[str, Any]] = None,
-    accessories: Optional[Mapping[str, Any]] = None,
-    gates: Optional[Mapping[str, Any]] = None,
-    resource_plan: Optional[Mapping[str, Any]] = None,
-    reproducibility: Optional[Mapping[str, Any]] = None,
-    notes: Optional[Sequence[str]] = None,
+    optimization: Mapping[str, Any] | None = None,
+    accessories: Mapping[str, Any] | None = None,
+    gates: Mapping[str, Any] | None = None,
+    resource_plan: Mapping[str, Any] | None = None,
+    reproducibility: Mapping[str, Any] | None = None,
+    notes: Sequence[str] | None = None,
 ) -> Dict[str, Any]:
     """Build the canonical pre-run briefing document."""
     return {

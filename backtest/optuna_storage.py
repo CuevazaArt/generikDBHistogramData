@@ -78,9 +78,9 @@ def ensure_optuna_schema(dsn: str) -> None:
 
 def build_storage(
     study_name: str,
-    app_config: Optional[AppConfig] = None,
+    app_config: AppConfig | None = None,
     *,
-    sqlite_path: Optional[str] = None,
+    sqlite_path: str | None = None,
 ) -> str:
     """Return an Optuna storage URL appropriate for `app_config`.
 

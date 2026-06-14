@@ -26,8 +26,8 @@ class EngineConfig:
     db_path: str
     symbol: str
     interval: str
-    start_ts: Optional[int] = None
-    end_ts: Optional[int] = None
+    start_ts: int | None = None
+    end_ts: int | None = None
     initial_cash: float = 10_000.0
     fee_rate: float = 0.001
     slippage_bps: float = 2.0
@@ -38,7 +38,7 @@ class EngineConfig:
     ema_period: int = 20
     rsi_period: int = 14
     atr_period: int = 14
-    loop_seconds: Optional[int] = None
+    loop_seconds: int | None = None
     # Persistence aggressiveness:
     #   "full"    -> emit one event per candle (legacy behaviour).
     #   "lite"    -> emit fills, rejects and periodic equity snapshots only.
@@ -47,21 +47,21 @@ class EngineConfig:
     # Used only in "lite" mode: minimum seconds between equity snapshots.
     snapshot_seconds: int = 3600
     # Optional warm-start snapshot for broker/strategy state.
-    initial_state: Optional[Dict[str, Any]] = None
+    initial_state: Dict[str, Any] | None = None
     # --- Fase 2: checkpointing knobs (all None preserves the legacy fast path) ---
     # Emit a checkpoint every N processed bars (None disables bar-based triggering).
-    checkpoint_every_bars: Optional[int] = None
+    checkpoint_every_bars: int | None = None
     # Emit a checkpoint every N seconds of simulated time elapsed
     # (None disables time-based triggering). Both triggers may run; we
     # emit whenever either threshold fires.
-    checkpoint_every_sim_seconds: Optional[int] = None
+    checkpoint_every_sim_seconds: int | None = None
     # Filesystem directory that will receive ``cp_<sim_ts>.json`` files.
     # Required when any ``checkpoint_every_*`` is set; otherwise ignored.
-    checkpoints_dir: Optional[str] = None
+    checkpoints_dir: str | None = None
     # Absolute path to a checkpoint file to resume from. When set, the
     # engine restores broker/strategy state, replays ``seq`` / clamps, and
     # skips candles up to (and including) ``candle_offset``.
-    resume_from_checkpoint: Optional[str] = None
+    resume_from_checkpoint: str | None = None
 
 
 @dataclass
@@ -71,8 +71,8 @@ class BacktestResult:
     events: List[Dict]
     equity_curve: List[float]
     candles: List[Dict]
-    run_id: Optional[int] = None
-    trial_id: Optional[int] = None
+    run_id: int | None = None
+    trial_id: int | None = None
     final_state: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -101,10 +101,10 @@ def _add_custom_smas(candles: List[Dict], fast: int, slow: int) -> None:
 def run_backtest(
     config: EngineConfig,
     strategy_cls: Type[StrategyBase],
-    strategy_params: Optional[Dict] = None,
-    run_id: Optional[int] = None,
-    trial_id: Optional[int] = None,
-    candles: Optional[List[Dict]] = None,
+    strategy_params: Dict | None = None,
+    run_id: int | None = None,
+    trial_id: int | None = None,
+    candles: List[Dict] | None = None,
 ) -> BacktestResult:
     """Execute a single backtest.
 
@@ -164,8 +164,8 @@ def run_backtest(
     equity_curve: List[float] = []
     trade_pnls: List[float] = []
     seq = 0
-    last_trade_entry: Optional[Tuple[float, float]] = None
-    last_exec_ts: Optional[int] = None
+    last_trade_entry: Tuple[float, float] | None = None
+    last_exec_ts: int | None = None
 
     events_mode = (config.events_mode or "full").strip().lower()
     if events_mode not in _EVENTS_MODES:
@@ -173,7 +173,7 @@ def run_backtest(
     emit_holds = events_mode == "full"
     emit_snapshots = events_mode == "lite"
     snapshot_step_ms = max(1, int(config.snapshot_seconds)) * 1000
-    last_snapshot_ts: Optional[int] = None
+    last_snapshot_ts: int | None = None
 
     # --- Fase 2: checkpoint state ----------------------------------------
     # Decoupled from the legacy fast path: when all of these are None the
@@ -194,7 +194,7 @@ def run_backtest(
         cp_every_bars is not None or cp_every_sim_seconds is not None
     )
     bars_since_cp = 0
-    last_checkpoint_sim_ts: Optional[int] = None
+    last_checkpoint_sim_ts: int | None = None
 
     # --- Fase 2: resume support ------------------------------------------
     skip_until_index: int = -1
@@ -425,10 +425,10 @@ def run_backtest(
 def run_backtest_streaming(
     config: EngineConfig,
     strategy_cls: Type[StrategyBase],
-    strategy_params: Optional[Dict] = None,
-    candle_batch_iter: Optional[Iterator[List[Dict]]] = None,
-    run_id: Optional[int] = None,
-    trial_id: Optional[int] = None,
+    strategy_params: Dict | None = None,
+    candle_batch_iter: Iterator[List[Dict]] | None = None,
+    run_id: int | None = None,
+    trial_id: int | None = None,
 ) -> BacktestResult:
     """Run a backtest over an iterator of candle batches.
 

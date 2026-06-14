@@ -101,7 +101,7 @@ def plot_equity_drawdown_combined(
     return output_path
 
 
-def _metrics_only(summary: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def _metrics_only(summary: Dict[str, Any] | None) -> Dict[str, Any]:
     if not summary:
         return {}
     m = summary.get("metrics", summary)
@@ -115,10 +115,10 @@ def _truncate_at_profit(
     *,
     baseline_equity: float,
     profit_target_usdt: float,
-) -> Tuple[List[Tuple], Optional[int]]:
+) -> Tuple[List[Tuple], int | None]:
     target = float(baseline_equity) + float(profit_target_usdt)
     out: List[Tuple] = []
-    hit_ts: Optional[int] = None
+    hit_ts: int | None = None
     for row in rows:
         eq = float(row[2])
         out.append(row)
@@ -133,15 +133,15 @@ def _run_chain(
     strategy_params: Dict[str, Any],
     *,
     baseline_equity: float,
-    profit_target_usdt: Optional[float],
+    profit_target_usdt: float | None,
 ) -> Dict[str, Any]:
     windows = monthly_windows(int(args.start_ts), int(args.end_ts))
-    state: Optional[Dict[str, Any]] = None
+    state: Dict[str, Any] | None = None
     month_runs: List[Dict[str, Any]] = []
     combined_eq: List[Tuple] = []
     target_reached = False
-    stop_window: Optional[str] = None
-    stop_ts: Optional[int] = None
+    stop_window: str | None = None
+    stop_ts: int | None = None
     last_run_id = 0
     last_metrics: Dict[str, Any] = {}
 
@@ -238,7 +238,7 @@ def _write_run_summary(
     engine: Dict[str, Any],
     window: Dict[str, Any],
     chart_path: str,
-    chain: Optional[Dict[str, Any]] = None,
+    chain: Dict[str, Any] | None = None,
 ) -> None:
     max_dd = float(metrics.get("max_drawdown", 0.0) or 0.0) * 100.0
     ret_pct = float(metrics.get("total_return", 0.0) or 0.0) * 100.0
@@ -361,7 +361,7 @@ def main() -> int:
     out_dir = strict_report_dir(args.output_root, run_name)
 
     baseline_equity = float(args.initial_cash)
-    chain_result: Optional[Dict[str, Any]] = None
+    chain_result: Dict[str, Any] | None = None
 
     if args.chain_by_month:
         print(f"[louise-pilot] Cadena mensual {run_name} …", flush=True)

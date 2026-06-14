@@ -23,21 +23,21 @@ from backtest.strategy_base import StrategyBase
 
 @dataclass
 class WalkForwardResult:
-    train_run_id: Optional[int]
-    test_run_id: Optional[int]
+    train_run_id: int | None
+    test_run_id: int | None
     train_metric: float
     test_metric: float
     metric_name: str
     best_params: Dict[str, Any]
-    split_ts: Optional[int]
+    split_ts: int | None
 
 
 def _candle_window_bounds(
     db_path: str,
     symbol: str,
     interval: str,
-    start_ts: Optional[int],
-    end_ts: Optional[int],
+    start_ts: int | None,
+    end_ts: int | None,
     train_pct: float,
 ) -> tuple[int, int, int]:
     candles = candles_to_dicts(
@@ -65,9 +65,9 @@ def run_walkforward(
     trials: int,
     n_jobs: int,
     train_pct: float = 0.7,
-    timeout: Optional[int] = None,
-    search_overrides: Optional[Dict[str, Any]] = None,
-    optimization: Optional[OptimizationConfig] = None,
+    timeout: int | None = None,
+    search_overrides: Dict[str, Any] | None = None,
+    optimization: OptimizationConfig | None = None,
 ) -> WalkForwardResult:
     opt = optimization or OptimizationConfig()
     (

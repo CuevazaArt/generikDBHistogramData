@@ -7,7 +7,7 @@ locally — without the stub, ``from . import _genericbt_core as _rust``
 would type-check as ``Any`` and every call site would lose hints.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 __version__: str
 
@@ -15,8 +15,8 @@ def run_backtest(
     config: Dict[str, Any],
     strategy: Any,
     candles: List[Dict[str, Any]],
-    run_id: Optional[int] = ...,
-    trial_id: Optional[int] = ...,
+    run_id: int | None = ...,
+    trial_id: int | None = ...,
 ) -> Dict[str, Any]:
     """Native bar loop. Returns dict with keys
     ``metrics`` / ``events`` / ``equity_curve`` / ``final_state`` /
@@ -30,7 +30,7 @@ def run_backtest(
     """
     ...
 
-def sma(values: List[float], period: int) -> List[Optional[float]]: ...
+def sma(values: List[float], period: int) -> List[float | None]: ...
 def apply_indicators(
     candles: List[Dict[str, Any]],
     sma_period: int,
@@ -61,4 +61,4 @@ class SpotBrokerRs:
         side: str,
         price: float,
         size_pct: float = ...,
-    ) -> Optional[Dict[str, Any]]: ...
+    ) -> Dict[str, Any] | None: ...

@@ -65,7 +65,7 @@ class _KeyringBackend:
             creds.api_secret,
         )
 
-    def load(self, *, service: str, username: str) -> Optional[Credentials]:
+    def load(self, *, service: str, username: str) -> Credentials | None:
         api_key = self._keyring.get_password(service, username)
         api_secret = self._keyring.get_password(self._secret_key(service, username), username)
         if not api_key or not api_secret:
@@ -105,7 +105,7 @@ class _EnvFileBackend:
             "BINANCE_ALPHA_SECRET in the environment before starting the service."
         )
 
-    def load(self, *, service: str, username: str) -> Optional[Credentials]:
+    def load(self, *, service: str, username: str) -> Credentials | None:
         api_key = os.environ.get("BINANCE_ALPHA_KEY")
         api_secret = os.environ.get("BINANCE_ALPHA_SECRET")
         if not api_key or not api_secret:
@@ -122,7 +122,7 @@ class _EnvFileBackend:
         raise CredentialsBackendError("EnvFileBackend cannot delete env vars.")
 
 
-def _select_backend(prefer: Optional[str] = None):
+def _select_backend(prefer: str | None = None):
     """Return the active backend. Prefer keyring; fallback to env."""
     if prefer == "env_file":
         return _EnvFileBackend()
@@ -137,7 +137,7 @@ def prompt_and_store(
     *,
     profile: str = _DEFAULT_PROFILE,
     service_name: str = _DEFAULT_SERVICE,
-    backend: Optional[str] = None,
+    backend: str | None = None,
 ) -> Credentials:
     """Interactive: prompt for key/secret and store in keyring.
 
@@ -176,8 +176,8 @@ def load(
     db: ClusterDB,
     *,
     profile: str = _DEFAULT_PROFILE,
-    backend: Optional[str] = None,
-) -> Optional[Credentials]:
+    backend: str | None = None,
+) -> Credentials | None:
     """Load credentials following the meta pointer; None if not stored."""
     meta = db.get_credentials_meta(profile)
     if meta is None:
@@ -200,7 +200,7 @@ def delete(
     db: ClusterDB,
     *,
     profile: str = _DEFAULT_PROFILE,
-    backend: Optional[str] = None,
+    backend: str | None = None,
 ) -> None:
     """Remove credentials from keyring; meta row is kept (history)."""
     meta = db.get_credentials_meta(profile)

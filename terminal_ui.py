@@ -62,7 +62,7 @@ def normalize_interval(value: str) -> str:
     return (value or "").strip().lower()
 
 
-def normalize_epoch_ms(value: Optional[int]) -> Optional[int]:
+def normalize_epoch_ms(value: int | None) -> int | None:
     if value is None:
         return None
     try:
@@ -75,7 +75,7 @@ def normalize_epoch_ms(value: Optional[int]) -> Optional[int]:
     return ts
 
 
-def format_ts(ms: Optional[int]) -> str:
+def format_ts(ms: int | None) -> str:
     normalized = normalize_epoch_ms(ms)
     if normalized is None:
         return "-"
@@ -238,7 +238,7 @@ def show_histogram_overview(db_path: str) -> None:
     print(f"Total series: {len(rows)} | Total filas: {total:,}")
 
 
-def parse_timestamp(text: str) -> Optional[int]:
+def parse_timestamp(text: str) -> int | None:
     if not text:
         return None
     try:
@@ -255,7 +255,7 @@ def parse_timestamp(text: str) -> Optional[int]:
             return None
 
 
-def get_db_min_max(db_path: str, symbol: str, interval: str) -> Optional[tuple]:
+def get_db_min_max(db_path: str, symbol: str, interval: str) -> tuple | None:
     """Return (min_open_time, max_open_time) for symbol/interval in DB, or None if no rows."""
     try:
         conn = sqlite3.connect(db_path)
@@ -273,7 +273,7 @@ def get_db_min_max(db_path: str, symbol: str, interval: str) -> Optional[tuple]:
         return None
 
 
-def ask(prompt: str, default: Optional[str] = None) -> str:
+def ask(prompt: str, default: str | None = None) -> str:
     if default:
         v = input(f"{prompt} [{default}]: ").strip()
         if v.lower() in ("exit", "quit"):

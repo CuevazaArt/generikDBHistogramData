@@ -35,10 +35,10 @@ from backtest.storage_paths import tmp_then_rename
 
 __all__ = [
     "Checkpoint",
-    "read_checkpoint",
-    "write_checkpoint",
     "latest_checkpoint_path",
     "now_iso_utc",
+    "read_checkpoint",
+    "write_checkpoint",
 ]
 
 
@@ -88,9 +88,9 @@ class Checkpoint:
     broker_state: Dict[str, Any]
     strategy_state: Dict[str, Any]
     seq: int
-    last_exec_ts: Optional[int]
-    last_snapshot_ts: Optional[int]
-    last_trade_entry: Optional[Tuple[float, float]]
+    last_exec_ts: int | None
+    last_snapshot_ts: int | None
+    last_trade_entry: Tuple[float, float] | None
     created_at: str = field(default_factory=now_iso_utc)
     engine_kind: str = "python"
     engine_version: str = "0.0.0"
@@ -106,7 +106,7 @@ class Checkpoint:
     @classmethod
     def from_dict(cls, payload: Dict[str, Any]) -> "Checkpoint":
         lte = payload.get("last_trade_entry")
-        lte_tuple: Optional[Tuple[float, float]]
+        lte_tuple: Tuple[float, float] | None
         if lte is None:
             lte_tuple = None
         else:
@@ -156,7 +156,7 @@ def read_checkpoint(path: str) -> Checkpoint:
     return Checkpoint.from_dict(payload)
 
 
-def latest_checkpoint_path(checkpoints_dir: str) -> Optional[str]:
+def latest_checkpoint_path(checkpoints_dir: str) -> str | None:
     """Return the highest-``sim_ts`` checkpoint in ``checkpoints_dir`` or None.
 
     Ordering is by the integer embedded in the filename (``cp_<sim_ts>.json``).

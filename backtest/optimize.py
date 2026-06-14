@@ -69,7 +69,7 @@ class OptimizationConfig:
     objective_metric: str = "total_return"
     direction: str = "maximize"
     sampler: str = "tpe"
-    seed: Optional[int] = None
+    seed: int | None = None
 
     def __post_init__(self) -> None:
         metric = (self.objective_metric or "total_return").strip().lower()
@@ -92,7 +92,7 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _build_sampler(sampler_name: str, seed: Optional[int]):
+def _build_sampler(sampler_name: str, seed: int | None):
     if optuna is None:  # pragma: no cover - runtime guard
         return None
     if sampler_name == "random":
@@ -110,11 +110,11 @@ def _coerce_metric_value(value: Any) -> float:
 
 
 def _resolve_storage_url(
-    optuna_storage_url: Optional[str],
-    optuna_storage_db: Optional[str],
+    optuna_storage_url: str | None,
+    optuna_storage_db: str | None,
     db_path: str,
     study_name: str,
-    app_config: Optional[AppConfig],
+    app_config: AppConfig | None,
 ) -> str:
     """Pick the first non-None of: explicit URL, legacy sqlite path, build_storage."""
     if optuna_storage_url:
@@ -135,15 +135,15 @@ def optimize_strategy(
     base_config: EngineConfig,
     trials: int = 50,
     n_jobs: int = 1,
-    timeout: Optional[int] = None,
-    search_overrides: Optional[Dict[str, Any]] = None,
-    optimization: Optional[OptimizationConfig] = None,
-    events_mode: Optional[str] = None,
-    optuna_storage_db: Optional[str] = None,
+    timeout: int | None = None,
+    search_overrides: Dict[str, Any] | None = None,
+    optimization: OptimizationConfig | None = None,
+    events_mode: str | None = None,
+    optuna_storage_db: str | None = None,
     *,
-    optuna_storage_url: Optional[str] = None,
-    app_config: Optional[AppConfig] = None,
-    orchestrator: Optional["object"] = None,
+    optuna_storage_url: str | None = None,
+    app_config: AppConfig | None = None,
+    orchestrator: "object" | None = None,
 ) -> Any:
     """Run Optuna optimization, optionally with PG storage and an Orchestrator.
 
@@ -337,10 +337,10 @@ def _dispatch_via_orchestrator(
     base_config: EngineConfig,
     trials: int,
     opt: OptimizationConfig,
-    search_overrides: Optional[Dict[str, Any]],
+    search_overrides: Dict[str, Any] | None,
     events_mode: str,
     db_path: str,
-    timeout: Optional[int],
+    timeout: int | None,
 ) -> None:
     """Submit `trials` jobs to `orchestrator.map`, one isolated worker each."""
     payload_template: Dict[str, Any] = {
@@ -368,14 +368,14 @@ def optimize_strategy_parallel(
     trials: int,
     n_jobs: int = 1,
     executor: str = "joblib",
-    app_config: Optional[AppConfig] = None,
-    optimization: Optional[OptimizationConfig] = None,
-    search_overrides: Optional[Dict[str, Any]] = None,
+    app_config: AppConfig | None = None,
+    optimization: OptimizationConfig | None = None,
+    search_overrides: Dict[str, Any] | None = None,
     events_mode: str = DEFAULT_OPTIMIZATION_EVENTS_MODE,
     ram_cap_pct: float = 80.0,
     cpu_cap_pct: float = 80.0,
-    per_worker_ram_mb: Optional[int] = None,
-    per_trial_timeout_sec: Optional[int] = None,
+    per_worker_ram_mb: int | None = None,
+    per_trial_timeout_sec: int | None = None,
 ) -> Any:
     """High-level entry point: Orchestrator + ResourceGuard + Optuna PG storage.
 

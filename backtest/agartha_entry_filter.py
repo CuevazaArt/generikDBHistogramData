@@ -81,12 +81,12 @@ class GateDecision:
     outcome: GateOutcome
     armed: bool
     reason: str
-    donchian_low: Optional[float] = None
-    donchian_trigger_price: Optional[float] = None
-    macro_ma: Optional[float] = None
-    macro_floor: Optional[float] = None
-    last_close: Optional[float] = None
-    prev_close: Optional[float] = None
+    donchian_low: float | None = None
+    donchian_trigger_price: float | None = None
+    macro_ma: float | None = None
+    macro_floor: float | None = None
+    last_close: float | None = None
+    prev_close: float | None = None
     metadata: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -257,7 +257,7 @@ class AgarthaWsMonitor:
         self.config = config
         self.op_history = deque(maxlen=int(op_capacity))
         self.macro_history = deque(maxlen=int(macro_capacity))
-        self.last_decision: Optional[GateDecision] = None
+        self.last_decision: GateDecision | None = None
 
     def push_operating_candle(self, candle: dict) -> None:
         self.op_history.append(candle)

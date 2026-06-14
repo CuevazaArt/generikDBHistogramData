@@ -57,9 +57,9 @@ class Reconciler:
         db: ClusterDB,
         client: LiveClient,
         events: EventLogger,
-        config: Optional[ReconcilerConfig] = None,
+        config: ReconcilerConfig | None = None,
         *,
-        on_fill: Optional[OnFillCallback] = None,
+        on_fill: OnFillCallback | None = None,
     ):
         self.db = db
         self.client = client
@@ -172,7 +172,7 @@ class Reconciler:
             except NotImplementedError:
                 # Live client not wired yet; nothing to do here.
                 return summary
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 summary["errors"] += 1
                 self.events.error(
                     kind=EventKind.RECONCILIATION_DRIFT,

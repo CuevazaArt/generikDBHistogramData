@@ -26,12 +26,12 @@ class Candle:
     low: float
     close: float
     volume: float
-    close_time: Optional[int]
-    quote_asset_volume: Optional[float]
+    close_time: int | None
+    quote_asset_volume: float | None
     num_trades: int
-    taker_buy_base: Optional[float]
-    taker_buy_quote: Optional[float]
-    ignore_field: Optional[str]
+    taker_buy_base: float | None
+    taker_buy_quote: float | None
+    ignore_field: str | None
 
     def to_dict(self) -> Dict:
         return {
@@ -56,10 +56,10 @@ def load_candles(
     db_path: str,
     symbol: str,
     interval: str,
-    start_ts: Optional[int] = None,
-    end_ts: Optional[int] = None,
+    start_ts: int | None = None,
+    end_ts: int | None = None,
 ) -> List[Candle]:
-    rows: Optional[List[Tuple]] = None
+    rows: List[Tuple] | None = None
     if _parquet_cache_enabled() and start_ts is not None and end_ts is not None:
         try:
             from backtest.data_cache import read_window  # local import to keep optional
@@ -124,8 +124,8 @@ def iter_candles(
     db_path: str,
     symbol: str,
     interval: str,
-    start_ts: Optional[int] = None,
-    end_ts: Optional[int] = None,
+    start_ts: int | None = None,
+    end_ts: int | None = None,
     fetch_size: int = 10000,
 ) -> Iterator[Candle]:
     """Stream candles one by one using a cursor (RAM bounded)."""
@@ -226,8 +226,8 @@ def iter_candles_arrow_batches(
     parquet_root: str,
     symbol: str,
     interval: str,
-    start_ts: Optional[int] = None,
-    end_ts: Optional[int] = None,
+    start_ts: int | None = None,
+    end_ts: int | None = None,
     batch_size: int = 65536,
 ) -> Iterator[List[Dict[str, Any]]]:
     """Yield candle batches read from the Parquet kline lake.

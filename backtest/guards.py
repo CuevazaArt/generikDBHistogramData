@@ -67,7 +67,7 @@ class ResourceGuardConfig:
 class ResourceGuard:
     """Adaptive guard with sustained-threshold trigger and recovery hysteresis."""
 
-    def __init__(self, config: Optional[ResourceGuardConfig] = None) -> None:
+    def __init__(self, config: ResourceGuardConfig | None = None) -> None:
         self.config = config or ResourceGuardConfig()
         self._max_windows = max(self.config.high_watermark_windows, self.config.recover_windows)
         self._high_history: Deque[bool] = deque(maxlen=self._max_windows)

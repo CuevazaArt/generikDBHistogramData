@@ -136,7 +136,7 @@ def _verify_manifest(data_root: str) -> Tuple[int, int, List[str]]:
     return (ok, len(missing), missing)
 
 
-def _utc_to_pg(value: Optional[str]) -> Optional[str]:
+def _utc_to_pg(value: str | None) -> str | None:
     if not value:
         return None
     # Legacy stored ISO8601 strings; PG accepts those directly.

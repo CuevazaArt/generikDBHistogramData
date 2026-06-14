@@ -17,11 +17,11 @@ ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
-from backtest.checkpoint import latest_checkpoint_path  # noqa: E402
-from backtest.engine import EngineConfig, run_backtest  # noqa: E402
-from backtest.storage_paths import StoragePaths  # noqa: E402
-from backtest.strategies import SmaCrossStrategy  # noqa: E402
-from tests.test_engine_rs_parity import _build_candles  # noqa: E402
+from backtest.checkpoint import latest_checkpoint_path
+from backtest.engine import EngineConfig, run_backtest
+from backtest.storage_paths import StoragePaths
+from backtest.strategies import SmaCrossStrategy
+from tests.test_engine_rs_parity import _build_candles
 
 
 def _base_config(**overrides: Any) -> EngineConfig:
@@ -45,7 +45,7 @@ def _base_config(**overrides: Any) -> EngineConfig:
 
 
 def test_resumable_runner_picks_latest_checkpoint(
-    tmp_path: "os.PathLike[str]", monkeypatch: pytest.MonkeyPatch
+    tmp_path: os.PathLike[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """When BACKTEST_RESUME_RUN_ID is set, the runner injects resume fields."""
     data_root = str(tmp_path)

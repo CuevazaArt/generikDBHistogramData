@@ -449,7 +449,7 @@ def _run_chain_for_profit_factor(
     strategy_params: Dict[str, Any],
     guard: ResourceGuard,
     guard_events: List[Dict[str, Any]],
-    chain_seed_state: Optional[Dict[str, Any]] = None,
+    chain_seed_state: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     state: Dict[str, Any] | None = dict(chain_seed_state) if chain_seed_state else None
     quarter_runs: List[Dict[str, Any]] = []
@@ -639,7 +639,7 @@ def run(args: argparse.Namespace) -> None:
     guard = _guard_from_args(args)
     guard_events: List[Dict[str, Any]] = []
 
-    chain_seed: Optional[Dict[str, Any]] = None
+    chain_seed: Dict[str, Any] | None = None
     seed_run_id = getattr(args, "seed_run_id", None)
     if seed_run_id is not None:
         chain_seed = _load_seed_state(args.db, int(seed_run_id))

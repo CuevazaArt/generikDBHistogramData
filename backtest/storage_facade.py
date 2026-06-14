@@ -32,16 +32,16 @@ class StorageBackend(Protocol):
         strategy: str,
         symbol: str,
         interval: str,
-        start_ts: Optional[int],
-        end_ts: Optional[int],
+        start_ts: int | None,
+        end_ts: int | None,
         initial_cash: float,
         fee_rate: float,
         slippage_bps: float,
-        config: Optional[Dict[str, Any]] = None,
-        idempotency_key: Optional[str] = None,
+        config: Dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
         engine_kind: str = "python",
         engine_version: str = "0.0.0",
-        strategy_params: Optional[Dict[str, Any]] = None,
+        strategy_params: Dict[str, Any] | None = None,
     ) -> int: ...
 
     def finish_run(self, run_id: int, status: str = "completed") -> None: ...
@@ -52,14 +52,14 @@ class StorageBackend(Protocol):
         events: Iterable[Dict[str, Any]],
         *,
         seq: int = 0,
-    ) -> Optional[str]: ...
+    ) -> str | None: ...
 
     def persist_run_metrics(
         self,
         run_id: int,
         metrics: Dict[str, float],
-        trial_id: Optional[int] = None,
-        extra: Optional[Dict[str, Any]] = None,
+        trial_id: int | None = None,
+        extra: Dict[str, Any] | None = None,
     ) -> None: ...
 
     def save_trial(
@@ -68,11 +68,11 @@ class StorageBackend(Protocol):
         study_name: str,
         optuna_trial_num: int,
         state: str,
-        objective: Optional[float],
+        objective: float | None,
         params: Dict[str, Any],
-        started_at: Optional[str] = None,
-        finished_at: Optional[str] = None,
-        run_id: Optional[int] = None,
+        started_at: str | None = None,
+        finished_at: str | None = None,
+        run_id: int | None = None,
     ) -> int: ...
 
     def save_trial_metrics(self, trial_id: int, metrics: Dict[str, float]) -> None: ...
@@ -85,7 +85,7 @@ class StorageBackend(Protocol):
 
     def run_signal_events(self, run_id: int) -> List[Any]: ...
 
-    def run_descriptor(self, run_id: int) -> Optional[Dict[str, Any]]: ...
+    def run_descriptor(self, run_id: int) -> Dict[str, Any] | None: ...
 
     def run_events(self, run_id: int) -> List[Any]: ...
 
@@ -112,16 +112,16 @@ class SqliteBackend:
         strategy: str,
         symbol: str,
         interval: str,
-        start_ts: Optional[int],
-        end_ts: Optional[int],
+        start_ts: int | None,
+        end_ts: int | None,
         initial_cash: float,
         fee_rate: float,
         slippage_bps: float,
-        config: Optional[Dict[str, Any]] = None,
-        idempotency_key: Optional[str] = None,
+        config: Dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
         engine_kind: str = "python",
         engine_version: str = "0.0.0",
-        strategy_params: Optional[Dict[str, Any]] = None,
+        strategy_params: Dict[str, Any] | None = None,
     ) -> int:
         # The SQLite layer does not consume `idempotency_key` / `engine_kind` /
         # `engine_version`; they are silently ignored here. The PG backend uses
@@ -149,7 +149,7 @@ class SqliteBackend:
         events: Iterable[Dict[str, Any]],
         *,
         seq: int = 0,
-    ) -> Optional[str]:
+    ) -> str | None:
         sqlite_storage.persist_run_events(self.db_path, run_id=run_id, events=list(events))
         return None
 
@@ -157,8 +157,8 @@ class SqliteBackend:
         self,
         run_id: int,
         metrics: Dict[str, float],
-        trial_id: Optional[int] = None,
-        extra: Optional[Dict[str, Any]] = None,
+        trial_id: int | None = None,
+        extra: Dict[str, Any] | None = None,
     ) -> None:
         sqlite_storage.persist_run_metrics(
             self.db_path, run_id=run_id, metrics=metrics, trial_id=trial_id, extra=extra
@@ -170,11 +170,11 @@ class SqliteBackend:
         study_name: str,
         optuna_trial_num: int,
         state: str,
-        objective: Optional[float],
+        objective: float | None,
         params: Dict[str, Any],
-        started_at: Optional[str] = None,
-        finished_at: Optional[str] = None,
-        run_id: Optional[int] = None,
+        started_at: str | None = None,
+        finished_at: str | None = None,
+        run_id: int | None = None,
     ) -> int:
         return sqlite_storage.save_trial(
             db_path=self.db_path,
@@ -203,7 +203,7 @@ class SqliteBackend:
     def run_signal_events(self, run_id: int) -> List[Any]:
         return sqlite_storage.run_signal_events(self.db_path, run_id=run_id)
 
-    def run_descriptor(self, run_id: int) -> Optional[Dict[str, Any]]:
+    def run_descriptor(self, run_id: int) -> Dict[str, Any] | None:
         return sqlite_storage.run_descriptor(self.db_path, run_id=run_id)
 
     def run_events(self, run_id: int) -> List[Any]:
@@ -229,7 +229,7 @@ class PgBackend:
 
     kind = "pg"
 
-    def __init__(self, dsn: str, storage_paths: Optional[StoragePaths] = None) -> None:
+    def __init__(self, dsn: str, storage_paths: StoragePaths | None = None) -> None:
         self.dsn = dsn
         self.paths = storage_paths or StoragePaths()
 
@@ -239,16 +239,16 @@ class PgBackend:
         strategy: str,
         symbol: str,
         interval: str,
-        start_ts: Optional[int],
-        end_ts: Optional[int],
+        start_ts: int | None,
+        end_ts: int | None,
         initial_cash: float,
         fee_rate: float,
         slippage_bps: float,
-        config: Optional[Dict[str, Any]] = None,
-        idempotency_key: Optional[str] = None,
+        config: Dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
         engine_kind: str = "python",
         engine_version: str = "0.0.0",
-        strategy_params: Optional[Dict[str, Any]] = None,
+        strategy_params: Dict[str, Any] | None = None,
     ) -> int:
         return pg_storage.create_run(
             self.dsn,
@@ -277,7 +277,7 @@ class PgBackend:
         events: Iterable[Dict[str, Any]],
         *,
         seq: int = 0,
-    ) -> Optional[str]:
+    ) -> str | None:
         return pg_storage.persist_run_events(
             self.dsn, run_id=run_id, events=events, seq=seq, storage_paths=self.paths
         )
@@ -286,8 +286,8 @@ class PgBackend:
         self,
         run_id: int,
         metrics: Dict[str, float],
-        trial_id: Optional[int] = None,
-        extra: Optional[Dict[str, Any]] = None,
+        trial_id: int | None = None,
+        extra: Dict[str, Any] | None = None,
     ) -> None:
         pg_storage.persist_run_metrics(
             self.dsn, run_id=run_id, metrics=metrics, trial_id=trial_id, extra=extra
@@ -299,11 +299,11 @@ class PgBackend:
         study_name: str,
         optuna_trial_num: int,
         state: str,
-        objective: Optional[float],
+        objective: float | None,
         params: Dict[str, Any],
-        started_at: Optional[str] = None,
-        finished_at: Optional[str] = None,
-        run_id: Optional[int] = None,
+        started_at: str | None = None,
+        finished_at: str | None = None,
+        run_id: int | None = None,
     ) -> int:
         return pg_storage.save_trial(
             self.dsn,
@@ -332,7 +332,7 @@ class PgBackend:
     def run_signal_events(self, run_id: int) -> List[Any]:
         return pg_storage.run_signal_events(self.dsn, run_id=run_id, storage_paths=self.paths)
 
-    def run_descriptor(self, run_id: int) -> Optional[Dict[str, Any]]:
+    def run_descriptor(self, run_id: int) -> Dict[str, Any] | None:
         return pg_storage.run_descriptor(self.dsn, run_id=run_id)
 
     def run_events(self, run_id: int) -> List[Any]:
@@ -353,7 +353,7 @@ class PgBackend:
         )
 
 
-def get_storage(config: Optional[AppConfig] = None) -> StorageBackend:
+def get_storage(config: AppConfig | None = None) -> StorageBackend:
     """Return the backend selected by `config`.
 
     If `config` is None, falls back to `AppConfig.from_env()`. The choice is
@@ -370,4 +370,4 @@ def get_storage(config: Optional[AppConfig] = None) -> StorageBackend:
     return SqliteBackend(db_path=cfg.sqlite_path)
 
 
-__all__ = ["StorageBackend", "SqliteBackend", "PgBackend", "get_storage"]
+__all__ = ["PgBackend", "SqliteBackend", "StorageBackend", "get_storage"]

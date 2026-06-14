@@ -109,6 +109,6 @@ def test_verify_dataset_artifact_reports_missing_prepared_file(tmp_path):
     assert result["status"] == "invalid"
     assert result["missing_files"]
 
-    with open(manifest_path, "r", encoding="utf-8") as fh:
+    with open(manifest_path, encoding="utf-8") as fh:
         loaded = json.load(fh)
     assert loaded["artifact_kind"] == "dataset_window"

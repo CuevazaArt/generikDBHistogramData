@@ -38,17 +38,17 @@ class AgarthaTickRecord:
     band_lower: float
     band_upper: float
     action: str
-    limit_price: Optional[float] = None
+    limit_price: float | None = None
     reason: str = ""
     fallback_used: bool = False
     crest_detected: bool = False
-    cash: Optional[float] = None
-    position_qty: Optional[float] = None
-    equity: Optional[float] = None
+    cash: float | None = None
+    position_qty: float | None = None
+    equity: float | None = None
     extra: dict = field(default_factory=dict)
 
 
-def _utc_iso(ms: Optional[int] = None) -> str:
+def _utc_iso(ms: int | None = None) -> str:
     if ms is None:
         return datetime.now(timezone.utc).isoformat()
     return datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc).isoformat()
@@ -61,11 +61,11 @@ def build_record(
     current_price: float,
     entry_price: float,
     plan: ExitPlan,
-    cash: Optional[float] = None,
-    position_qty: Optional[float] = None,
-    equity: Optional[float] = None,
-    ts_ms: Optional[int] = None,
-    extra: Optional[dict] = None,
+    cash: float | None = None,
+    position_qty: float | None = None,
+    equity: float | None = None,
+    ts_ms: int | None = None,
+    extra: dict | None = None,
 ) -> AgarthaTickRecord:
     """Convierte un ExitPlan + contexto en un AgarthaTickRecord listo para log."""
     distance_pct = 0.0
@@ -108,8 +108,8 @@ class AgarthaJsonlLogger:
         self.prefix = prefix
         os.makedirs(output_dir, exist_ok=True)
         self._fh = None
-        self._current_path: Optional[str] = None
-        self._current_day: Optional[str] = None
+        self._current_path: str | None = None
+        self._current_day: str | None = None
 
     def _path_for(self, symbol: str, day_utc: str) -> str:
         safe_sym = symbol.upper().replace("/", "_")

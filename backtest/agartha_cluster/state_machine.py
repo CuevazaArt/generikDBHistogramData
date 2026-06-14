@@ -87,7 +87,7 @@ def can_transition(current: BotState, target: BotState) -> bool:
     return target in _ALLOWED.get(current, frozenset())
 
 
-def transition(current: BotState, target: BotState, *, reason: Optional[str] = None) -> BotState:
+def transition(current: BotState, target: BotState, *, reason: str | None = None) -> BotState:
     """Validate and return the target state (no side effects).
 
     Parameters

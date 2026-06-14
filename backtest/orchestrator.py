@@ -63,8 +63,8 @@ class FailureResult:
 
     index: int
     error: str
-    peak_rss_mb: Optional[float] = None
-    elapsed_sec: Optional[float] = None
+    peak_rss_mb: float | None = None
+    elapsed_sec: float | None = None
 
 
 @dataclass
@@ -73,14 +73,14 @@ class OrchestratorConfig:
     n_jobs: int = 1
     ram_cap_pct: float = 80.0
     cpu_cap_pct: float = 80.0
-    per_worker_ram_mb: Optional[int] = None
-    per_trial_timeout_sec: Optional[int] = None
+    per_worker_ram_mb: int | None = None
+    per_trial_timeout_sec: int | None = None
     guard_sample_sec: float = 5.0
     guard_high_windows: int = 3
     guard_recover_windows: int = 3
-    max_jobs_ceiling: Optional[int] = None
+    max_jobs_ceiling: int | None = None
     log_path: str = DEFAULT_LOG_PATH
-    audit_run_id: Optional[int] = None
+    audit_run_id: int | None = None
     # Test-friendly knobs: when True, force the guard to re-sample on every call.
     force_resample: bool = False
 
@@ -108,7 +108,7 @@ def _try_import_joblib():
         return None
 
 
-def _run_one(fn: Callable[[Any], Any], job: Any, limits: Optional[WorkerLimits], timeout: Optional[float]) -> WorkerResult:
+def _run_one(fn: Callable[[Any], Any], job: Any, limits: WorkerLimits | None, timeout: float | None) -> WorkerResult:
     """Module-level helper so spawn-based multiprocessing can pickle it."""
     return spawn_isolated_worker(fn, (job,), limits=limits, timeout_sec=timeout)
 
@@ -119,7 +119,7 @@ class Orchestrator:
     def __init__(
         self,
         config: OrchestratorConfig,
-        guard: Optional[ResourceGuard] = None,
+        guard: ResourceGuard | None = None,
     ) -> None:
         self.config = config
         self.guard = guard or ResourceGuard(
@@ -141,7 +141,7 @@ class Orchestrator:
             )
         self._log_path = str(config.log_path)
         self._audit_lock = Lock()
-        self._app_config: Optional[AppConfig] = None
+        self._app_config: AppConfig | None = None
         try:
             self._app_config = AppConfig.from_env()
         except Exception:
@@ -185,13 +185,13 @@ class Orchestrator:
         self,
         fn: Callable[[Any], Any],
         jobs: List[Any],
-        limits: Optional[WorkerLimits],
-        timeout: Optional[float],
+        limits: WorkerLimits | None,
+        timeout: float | None,
         *,
         _runner: Callable[..., List[Any]],
     ) -> List[Any]:
         """Iterate `jobs` in dynamically sized waves, applying throttle hooks."""
-        results: List[Optional[Any]] = [None] * len(jobs)
+        results: List[Any | None] = [None] * len(jobs)
         pending_indices = list(range(len(jobs)))
 
         while pending_indices:
@@ -211,8 +211,8 @@ class Orchestrator:
         self,
         fn: Callable[[Any], Any],
         wave: List[Any],
-        limits: Optional[WorkerLimits],
-        timeout: Optional[float],
+        limits: WorkerLimits | None,
+        timeout: float | None,
     ) -> List[WorkerResult]:
         return [_run_one(fn, job, limits, timeout) for job in wave]
 
@@ -220,8 +220,8 @@ class Orchestrator:
         self,
         fn: Callable[[Any], Any],
         wave: List[Any],
-        limits: Optional[WorkerLimits],
-        timeout: Optional[float],
+        limits: WorkerLimits | None,
+        timeout: float | None,
     ) -> List[WorkerResult]:
         if len(wave) == 1:
             return [_run_one(fn, wave[0], limits, timeout)]
@@ -242,8 +242,8 @@ class Orchestrator:
         self,
         fn: Callable[[Any], Any],
         wave: List[Any],
-        limits: Optional[WorkerLimits],
-        timeout: Optional[float],
+        limits: WorkerLimits | None,
+        timeout: float | None,
     ) -> List[WorkerResult]:
         ray = _try_import_ray()
         if ray is None:
@@ -329,7 +329,7 @@ class Orchestrator:
                 },
             )
 
-    def _worker_limits(self) -> Optional[WorkerLimits]:
+    def _worker_limits(self) -> WorkerLimits | None:
         if self.config.per_worker_ram_mb is None and self.config.per_trial_timeout_sec is None:
             return None
         ram_bytes = (
@@ -409,8 +409,8 @@ def from_app_config(app_config: AppConfig) -> Orchestrator:
 
 __all__ = [
     "FailureResult",
+    "OrchestrationError",
     "Orchestrator",
     "OrchestratorConfig",
-    "OrchestrationError",
     "from_app_config",
 ]

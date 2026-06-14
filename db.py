@@ -185,7 +185,7 @@ def cure_kline_row_format(row: Tuple) -> Tuple:
     )
 
 
-def cure_klines_time_format(path: str, symbol: Optional[str] = None, interval: Optional[str] = None) -> Dict[str, int]:
+def cure_klines_time_format(path: str, symbol: str | None = None, interval: str | None = None) -> Dict[str, int]:
     """Detect and normalize stored kline timestamps to milliseconds.
 
     Repairs rows persisted in seconds/microseconds/nanoseconds.
@@ -308,9 +308,9 @@ def query_klines(
     path: str,
     symbol: str,
     interval: str,
-    start_ts: Optional[int] = None,
-    end_ts: Optional[int] = None,
-    limit: Optional[int] = None,
+    start_ts: int | None = None,
+    end_ts: int | None = None,
+    limit: int | None = None,
 ) -> List[Tuple]:
     conn = _connect(path)
     cur = conn.cursor()
@@ -336,8 +336,8 @@ def iter_query_klines(
     path: str,
     symbol: str,
     interval: str,
-    start_ts: Optional[int] = None,
-    end_ts: Optional[int] = None,
+    start_ts: int | None = None,
+    end_ts: int | None = None,
     fetch_size: int = 10000,
 ):
     """Yield kline rows in `fetch_size` batches without materializing all.
@@ -373,12 +373,12 @@ def create_bt_run(
     strategy_name: str,
     symbol: str,
     interval: str,
-    start_ts: Optional[int],
-    end_ts: Optional[int],
+    start_ts: int | None,
+    end_ts: int | None,
     initial_cash: float,
     fee_rate: float,
     slippage_bps: float,
-    config: Optional[Dict[str, Any]] = None,
+    config: Dict[str, Any] | None = None,
 ) -> int:
     conn = _connect(path)
     run_id = 0
@@ -492,8 +492,8 @@ def upsert_bt_metrics(
     path: str,
     run_id: int,
     metrics: Dict[str, float],
-    trial_id: Optional[int] = None,
-    extra: Optional[Dict[str, Any]] = None,
+    trial_id: int | None = None,
+    extra: Dict[str, Any] | None = None,
 ) -> None:
     now = _utc_now()
     extra_json = json.dumps(extra or {}, ensure_ascii=False)
@@ -535,11 +535,11 @@ def create_bt_trial(
     study_name: str,
     trial_number: int,
     state: str,
-    objective: Optional[float],
+    objective: float | None,
     params: Dict[str, Any],
     started_at: str,
-    finished_at: Optional[str],
-    duration_sec: Optional[float],
+    finished_at: str | None,
+    duration_sec: float | None,
 ) -> int:
     conn = _connect(path)
     with conn:
@@ -736,7 +736,7 @@ def get_bt_run_events(path: str, run_id: int) -> List[Tuple]:
     return rows
 
 
-def get_bt_run_descriptor(path: str, run_id: int) -> Optional[Dict[str, Any]]:
+def get_bt_run_descriptor(path: str, run_id: int) -> Dict[str, Any] | None:
     conn = _connect(path)
     cur = conn.cursor()
     cur.execute(

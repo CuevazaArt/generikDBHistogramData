@@ -23,7 +23,7 @@ def _bool_env(name: str, default: bool = False) -> bool:
 
 @dataclass(frozen=True)
 class AppConfig:
-    pg_dsn: Optional[str]
+    pg_dsn: str | None
     metadata_backend: str
     data_root: str
     sqlite_path: str

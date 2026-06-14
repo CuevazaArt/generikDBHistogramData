@@ -39,7 +39,7 @@ class SweetSpotConfig:
     fee_rate: float = 0.001
     slippage_bps: float = 2.0
     use_heikin_ashi: bool = False
-    loop_seconds: Optional[int] = None
+    loop_seconds: int | None = None
     # Phase 1 (coarse search) controls
     coarse_window_pct: float = 0.25      # fraction of full window used for phase 1
     coarse_trials: int = 60
@@ -47,8 +47,8 @@ class SweetSpotConfig:
     coarse_objective_metric: str = "total_return"
     coarse_direction: str = "maximize"
     coarse_sampler: str = "tpe"
-    coarse_seed: Optional[int] = 42
-    coarse_timeout: Optional[int] = None
+    coarse_seed: int | None = 42
+    coarse_timeout: int | None = None
     coarse_search_overrides: Dict[str, Any] = field(default_factory=dict)
     # Phase 2 (focused validation) controls
     focused_top_k: int = 5
@@ -70,7 +70,7 @@ class SweetSpotConfig:
     # Optional split-storage layout for heavy parallel optimization:
     # when set, Optuna's RDB storage is isolated from `db_path`
     # (which keeps holding `klines` reads and `bt_events` writes).
-    optuna_storage_db: Optional[str] = None
+    optuna_storage_db: str | None = None
 
 
 @dataclass
@@ -79,7 +79,7 @@ class SweetSpotResult:
     focused_study_name: str
     coarse_trials_completed: int
     focused_runs: List[Dict[str, Any]]
-    best_focused_run: Optional[Dict[str, Any]]
+    best_focused_run: Dict[str, Any] | None
     coarse_window: Tuple[int, int]
     full_window: Tuple[int, int]
     config_snapshot: Dict[str, Any]
@@ -116,7 +116,7 @@ def _coarse_window(full_start: int, full_end: int, pct: float) -> Tuple[int, int
 
 def run_sweet_spot_search(
     cfg: SweetSpotConfig,
-    progress_cb: Optional[Callable[[str], None]] = None,
+    progress_cb: Callable[[str], None] | None = None,
 ) -> SweetSpotResult:
     """Execute the coarse search and the focused validation."""
 

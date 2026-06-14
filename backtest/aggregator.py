@@ -148,8 +148,8 @@ def aggregate_multi_symbol_metrics(per_symbol: Dict[str, Dict[str, Any]]) -> Dic
 
     returns: List[float] = []
     summary: List[Dict[str, Any]] = []
-    best_symbol: Optional[str] = None
-    worst_symbol: Optional[str] = None
+    best_symbol: str | None = None
+    worst_symbol: str | None = None
     best_ret = -math.inf
     worst_ret = math.inf
 
@@ -198,6 +198,6 @@ def aggregate_multi_symbol_metrics(per_symbol: Dict[str, Dict[str, Any]]) -> Dic
 
 
 __all__ = [
-    "aggregate_walk_forward_metrics",
     "aggregate_multi_symbol_metrics",
+    "aggregate_walk_forward_metrics",
 ]

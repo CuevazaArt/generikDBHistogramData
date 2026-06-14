@@ -61,7 +61,7 @@ def dump_events_to_parquet(
     output_path: str,
     events: Iterable[Dict[str, Any]],
     batch_size: int = 50000,
-) -> Optional[str]:
+) -> str | None:
     """Write events to a Parquet file in append-friendly batches.
 
     Returns the absolute path of the written file, or None if pyarrow is

@@ -40,7 +40,7 @@ from backtest.sweet_spot import SweetSpotResult
 
 def _load_via_duckdb(
     run_id: int, data_root: str = "data"
-) -> Optional[Dict[str, List[Tuple]]]:
+) -> Dict[str, List[Tuple]] | None:
     """Return equity/signal/event rows from Parquet, or ``None`` to fall back.
 
     The shapes match what ``backtest.storage`` returns from SQLite so the
@@ -65,7 +65,7 @@ def _load_via_duckdb(
     return {"eq_rows": eq_rows, "sig_rows": sig_rows, "ev_rows": ev_rows}
 
 
-def _ms_to_iso(v: Optional[int]) -> str:
+def _ms_to_iso(v: int | None) -> str:
     if v is None:
         return ""
     try:
@@ -220,7 +220,7 @@ def _fill_activity_story(activity_rows: List[Tuple]) -> str:
     )
 
 
-def _usage_guide(strategy_name: str, symbol: str, interval: str, loop_seconds: Optional[int], params: Dict[str, Any]) -> str:
+def _usage_guide(strategy_name: str, symbol: str, interval: str, loop_seconds: int | None, params: Dict[str, Any]) -> str:
     extras = ""
     if loop_seconds:
         extras = f"--loop_seconds {loop_seconds} "

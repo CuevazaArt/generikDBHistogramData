@@ -70,7 +70,7 @@ class ClusterDB:
             practice this catches >99% of power-loss / unplug scenarios.
         """
         self.db_path = str(db_path)
-        self._conn: Optional[sqlite3.Connection] = None
+        self._conn: sqlite3.Connection | None = None
         if synchronous.upper() not in {"OFF", "NORMAL", "FULL", "EXTRA"}:
             raise ValueError(f"Invalid synchronous mode: {synchronous!r}")
         self._synchronous = synchronous.upper()
@@ -147,7 +147,7 @@ class ClusterDB:
         conn = self.connect()
         conn.executescript(sql_text)
 
-    def schema_version(self) -> Optional[str]:
+    def schema_version(self) -> str | None:
         conn = self.connect()
         row = conn.execute(
             "SELECT value FROM schema_meta WHERE key='schema_version'"
@@ -206,7 +206,7 @@ class ClusterDB:
             raise
         return n
 
-    def list_universe(self, status: Optional[str] = None) -> list[sqlite3.Row]:
+    def list_universe(self, status: str | None = None) -> list[sqlite3.Row]:
         conn = self.connect()
         if status is None:
             return list(conn.execute("SELECT * FROM alpha_universe ORDER BY symbol"))
@@ -227,7 +227,7 @@ class ClusterDB:
     # ------------------------------------------------------------------
     # Symbol params
     # ------------------------------------------------------------------
-    def upsert_symbol_params(self, params: SymbolParams, raw_params: Optional[dict] = None) -> None:
+    def upsert_symbol_params(self, params: SymbolParams, raw_params: dict | None = None) -> None:
         conn = self.connect()
         conn.execute(
             """
@@ -275,7 +275,7 @@ class ClusterDB:
             },
         )
 
-    def get_symbol_params(self, symbol: str) -> Optional[SymbolParams]:
+    def get_symbol_params(self, symbol: str) -> SymbolParams | None:
         conn = self.connect()
         row = conn.execute(
             "SELECT * FROM symbol_params WHERE symbol = ?", (symbol,)
@@ -301,7 +301,7 @@ class ClusterDB:
     # ------------------------------------------------------------------
     # Symbol filters
     # ------------------------------------------------------------------
-    def upsert_symbol_filters(self, filters: SymbolFilters, raw: Optional[dict] = None) -> None:
+    def upsert_symbol_filters(self, filters: SymbolFilters, raw: dict | None = None) -> None:
         conn = self.connect()
         conn.execute(
             """
@@ -340,7 +340,7 @@ class ClusterDB:
             },
         )
 
-    def get_symbol_filters(self, symbol: str) -> Optional[SymbolFilters]:
+    def get_symbol_filters(self, symbol: str) -> SymbolFilters | None:
         conn = self.connect()
         row = conn.execute(
             "SELECT * FROM symbol_filters WHERE symbol = ?", (symbol,)
@@ -406,7 +406,7 @@ class ClusterDB:
         conn = self.connect()
         conn.execute(sql, params)
 
-    def get_bot(self, bot_id: int) -> Optional[BotRecord]:
+    def get_bot(self, bot_id: int) -> BotRecord | None:
         conn = self.connect()
         row = conn.execute(
             "SELECT * FROM cluster_bots WHERE bot_id = ?", (bot_id,)
@@ -441,9 +441,9 @@ class ClusterDB:
     def list_bots(
         self,
         *,
-        state: Optional[BotState] = None,
-        symbol: Optional[str] = None,
-        limit: Optional[int] = None,
+        state: BotState | None = None,
+        symbol: str | None = None,
+        limit: int | None = None,
     ) -> list[BotRecord]:
         conn = self.connect()
         clauses: list[str] = []
@@ -493,11 +493,11 @@ class ClusterDB:
         self,
         *,
         bot_id: int,
-        from_state: Optional[BotState],
+        from_state: BotState | None,
         to_state: BotState,
-        reason: Optional[str],
-        correlation_id: Optional[str] = None,
-        ts_ms: Optional[int] = None,
+        reason: str | None,
+        correlation_id: str | None = None,
+        ts_ms: int | None = None,
     ) -> None:
         conn = self.connect()
         conn.execute(
@@ -524,8 +524,8 @@ class ClusterDB:
         symbol: str,
         planned_deploy_ts: int,
         priority: int = 100,
-        reason: Optional[str] = None,
-    ) -> Optional[int]:
+        reason: str | None = None,
+    ) -> int | None:
         """Insert a planned deploy. Returns queue_id or None if duplicate active."""
         conn = self.connect()
         try:
@@ -540,7 +540,7 @@ class ClusterDB:
         except sqlite3.IntegrityError:
             return None
 
-    def next_due_deploy(self, *, now_ms: Optional[int] = None) -> Optional[sqlite3.Row]:
+    def next_due_deploy(self, *, now_ms: int | None = None) -> sqlite3.Row | None:
         """Return the next planned deploy whose planned_deploy_ts has passed."""
         now_ms = int(now_ms if now_ms is not None else _now_ms())
         conn = self.connect()
@@ -560,9 +560,9 @@ class ClusterDB:
         queue_id: int,
         status: str,
         *,
-        bot_id: Optional[int] = None,
-        actual_deploy_ts: Optional[int] = None,
-        reason: Optional[str] = None,
+        bot_id: int | None = None,
+        actual_deploy_ts: int | None = None,
+        reason: str | None = None,
     ) -> None:
         conn = self.connect()
         conn.execute(
@@ -577,7 +577,7 @@ class ClusterDB:
             (status, bot_id, actual_deploy_ts, reason, queue_id),
         )
 
-    def last_deploy_ts(self) -> Optional[int]:
+    def last_deploy_ts(self) -> int | None:
         conn = self.connect()
         row = conn.execute(
             "SELECT MAX(actual_deploy_ts) AS m FROM deploy_queue WHERE actual_deploy_ts IS NOT NULL"
@@ -622,10 +622,10 @@ class ClusterDB:
         *,
         client_order_id: str,
         state: OrderState,
-        filled_qty: Optional[float] = None,
-        avg_fill_price: Optional[float] = None,
-        order_id: Optional[str] = None,
-        raw_response: Optional[str] = None,
+        filled_qty: float | None = None,
+        avg_fill_price: float | None = None,
+        order_id: str | None = None,
+        raw_response: str | None = None,
     ) -> None:
         conn = self.connect()
         conn.execute(
@@ -650,7 +650,7 @@ class ClusterDB:
             ),
         )
 
-    def get_order_by_client_id(self, client_order_id: str) -> Optional[sqlite3.Row]:
+    def get_order_by_client_id(self, client_order_id: str) -> sqlite3.Row | None:
         conn = self.connect()
         return conn.execute(
             "SELECT * FROM orders WHERE client_order_id = ?",
@@ -661,18 +661,18 @@ class ClusterDB:
         self,
         *,
         bot_id: int,
-        order_pk: Optional[int],
-        exchange_fill_id: Optional[str],
+        order_pk: int | None,
+        exchange_fill_id: str | None,
         symbol: str,
         side: OrderSide,
         price: float,
         qty: float,
         fee: float,
-        fee_asset: Optional[str],
+        fee_asset: str | None,
         ts_ms: int,
         is_maker: bool,
-        correlation_id: Optional[str],
-        raw_payload: Optional[str],
+        correlation_id: str | None,
+        raw_payload: str | None,
     ) -> int:
         conn = self.connect()
         cur = conn.execute(
@@ -709,12 +709,12 @@ class ClusterDB:
         endpoint: str,
         method: str,
         weight: int,
-        status_code: Optional[int],
-        latency_ms: Optional[int],
-        bot_id: Optional[int],
-        correlation_id: Optional[str],
-        request_summary: Optional[str] = None,
-        error_text: Optional[str] = None,
+        status_code: int | None,
+        latency_ms: int | None,
+        bot_id: int | None,
+        correlation_id: str | None,
+        request_summary: str | None = None,
+        error_text: str | None = None,
     ) -> int:
         conn = self.connect()
         cur = conn.execute(
@@ -766,11 +766,11 @@ class ClusterDB:
     def query_events(
         self,
         *,
-        bot_id: Optional[int] = None,
-        symbol: Optional[str] = None,
-        kind: Optional[EventKind] = None,
-        level: Optional[EventLevel] = None,
-        since_ms: Optional[int] = None,
+        bot_id: int | None = None,
+        symbol: str | None = None,
+        kind: EventKind | None = None,
+        level: EventLevel | None = None,
+        since_ms: int | None = None,
         limit: int = 200,
     ) -> list[sqlite3.Row]:
         conn = self.connect()
@@ -841,7 +841,7 @@ class ClusterDB:
         ts_ms: int,
         open_orders_count: int,
         positions_count: int,
-        total_equity_usdt: Optional[float],
+        total_equity_usdt: float | None,
         drift_detected: bool,
         snapshot: dict,
     ) -> int:
@@ -878,7 +878,7 @@ class ClusterDB:
         )
         return int(cur.lastrowid)
 
-    def stop_service_run(self, run_id: int, *, reason: Optional[str]) -> None:
+    def stop_service_run(self, run_id: int, *, reason: str | None) -> None:
         conn = self.connect()
         conn.execute(
             "UPDATE service_runs SET stopped_at = datetime('now'), stop_reason = ? WHERE run_id = ?",
@@ -888,7 +888,7 @@ class ClusterDB:
     def list_open_service_runs(
         self,
         *,
-        exclude_run_id: Optional[int] = None,
+        exclude_run_id: int | None = None,
     ) -> list[sqlite3.Row]:
         """Return service_runs rows whose ``stopped_at IS NULL``.
 
@@ -995,7 +995,7 @@ class ClusterDB:
             (profile, service_name, username, storage_method),
         )
 
-    def get_credentials_meta(self, profile: str = "default") -> Optional[sqlite3.Row]:
+    def get_credentials_meta(self, profile: str = "default") -> sqlite3.Row | None:
         conn = self.connect()
         return conn.execute(
             "SELECT * FROM credentials_meta WHERE profile = ?", (profile,)
@@ -1040,8 +1040,8 @@ class ClusterDB:
     def get_resource_metrics(
         self,
         *,
-        since_ms: Optional[int] = None,
-        limit: Optional[int] = None,
+        since_ms: int | None = None,
+        limit: int | None = None,
     ) -> list[sqlite3.Row]:
         conn = self.connect()
         clauses: list[str] = []

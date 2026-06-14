@@ -6,16 +6,16 @@ from typing import Any, Dict, Optional
 @dataclass
 class Event:
     seq: int
-    event_time: Optional[int]
+    event_time: int | None
     event_type: str
-    side: Optional[str] = None
-    price: Optional[float] = None
-    qty: Optional[float] = None
-    cash: Optional[float] = None
-    equity: Optional[float] = None
-    position_qty: Optional[float] = None
+    side: str | None = None
+    price: float | None = None
+    qty: float | None = None
+    cash: float | None = None
+    equity: float | None = None
+    position_qty: float | None = None
     payload: Dict[str, Any] = field(default_factory=dict)
-    trial_id: Optional[int] = None
+    trial_id: int | None = None
 
     def to_record(self) -> Dict[str, Any]:
         return {

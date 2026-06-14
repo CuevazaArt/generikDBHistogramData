@@ -42,12 +42,12 @@ class WindowStats:
     symbol: str
     interval: str
     count: int
-    min_open_time: Optional[int]
-    max_open_time: Optional[int]
+    min_open_time: int | None
+    max_open_time: int | None
     expected_step_ms: int
 
 
-def window_stats(db_path: str, symbol: str, interval: str, start_ts: Optional[int] = None, end_ts: Optional[int] = None) -> WindowStats:
+def window_stats(db_path: str, symbol: str, interval: str, start_ts: int | None = None, end_ts: int | None = None) -> WindowStats:
     conn = sqlite3.connect(db_path, timeout=30.0)
     try:
         cur = conn.cursor()
@@ -76,7 +76,7 @@ def next_continuous_open_time(
     db_path: str,
     symbol: str,
     interval: str,
-) -> Optional[int]:
+) -> int | None:
     """Return the timestamp immediately after the last known kline.
 
     Useful to resume downloads from where the local DB left off.
@@ -91,8 +91,8 @@ def find_gaps(
     db_path: str,
     symbol: str,
     interval: str,
-    start_ts: Optional[int] = None,
-    end_ts: Optional[int] = None,
+    start_ts: int | None = None,
+    end_ts: int | None = None,
     max_gaps: int = 1000,
 ) -> List[Tuple[int, int]]:
     """Detect gaps within [start_ts, end_ts] returning (gap_start, gap_end) pairs.
@@ -115,7 +115,7 @@ def find_gaps(
             params.append(int(end_ts))
         sql += " ORDER BY open_time ASC"
         cur.execute(sql, params)
-        prev: Optional[int] = None
+        prev: int | None = None
         gaps: List[Tuple[int, int]] = []
         for (ts,) in cur:
             ts = int(ts)

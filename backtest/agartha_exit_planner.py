@@ -49,7 +49,7 @@ class SymbolFilters:
 class ExitPlan:
     """Resultado del planner: que hacer este tick."""
     action: ExitAction
-    limit_price: Optional[float] = None
+    limit_price: float | None = None
     reason: str = ""
     peak_price: float = 0.0
     trail_floor: float = 0.0
@@ -139,7 +139,7 @@ def plan_exit(
     trailing_stop_pct: float,
     breakeven_lock_pct: float = 0.0,
     filters: SymbolFilters = SymbolFilters(),
-    recent_highs: Optional[Sequence[float]] = None,
+    recent_highs: Sequence[float] | None = None,
     crest_pullback_pct: float = 15.0,
     aggressive_limit_offset_ticks: int = 1,
 ) -> ExitPlan:

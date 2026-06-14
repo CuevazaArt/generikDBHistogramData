@@ -25,17 +25,17 @@ class OrchestrationError(RuntimeError):
 
 @dataclass
 class WorkerLimits:
-    max_ram_bytes: Optional[int] = None
-    max_cpu_seconds: Optional[int] = None
+    max_ram_bytes: int | None = None
+    max_cpu_seconds: int | None = None
 
 
 @dataclass
 class WorkerResult:
     ok: bool
     value: Any = None
-    error: Optional[str] = None
-    peak_rss_mb: Optional[float] = None
-    elapsed_sec: Optional[float] = None
+    error: str | None = None
+    peak_rss_mb: float | None = None
+    elapsed_sec: float | None = None
 
 
 def _try_pickle(obj: Any, label: str) -> None:
@@ -122,7 +122,7 @@ def _child_entry(
     queue: "multiprocessing.queues.Queue",
     target_payload: bytes,
     args_payload: bytes,
-    limits: Optional[WorkerLimits],
+    limits: WorkerLimits | None,
 ) -> None:
     """Top-level entry point for the spawned subprocess.
 
@@ -153,8 +153,8 @@ def _child_entry(
 def spawn_isolated_worker(
     target: Callable[..., Any],
     args: Tuple[Any, ...] = (),
-    limits: Optional[WorkerLimits] = None,
-    timeout_sec: Optional[float] = None,
+    limits: WorkerLimits | None = None,
+    timeout_sec: float | None = None,
 ) -> WorkerResult:
     """Run `target(*args)` in a fresh `multiprocessing.Process`.
 
@@ -180,7 +180,7 @@ def spawn_isolated_worker(
     started = time.monotonic()
     proc.start()
 
-    peak_rss_mb: Optional[float] = None
+    peak_rss_mb: float | None = None
     try:
         import psutil  # type: ignore[import-not-found,import-untyped]
 
@@ -224,7 +224,7 @@ def spawn_isolated_worker(
     proc.join(timeout=5.0)
     elapsed = time.monotonic() - started
 
-    payload: Optional[dict] = None
+    payload: dict | None = None
     try:
         if not queue.empty():
             payload = queue.get_nowait()

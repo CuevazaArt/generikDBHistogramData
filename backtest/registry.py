@@ -246,7 +246,7 @@ def _suggest_float_param(
     return float(trial.suggest_float(name, lo, hi))
 
 
-def suggest_params(trial: Any, strategy_name: str, search_overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def suggest_params(trial: Any, strategy_name: str, search_overrides: Dict[str, Any] | None = None) -> Dict[str, Any]:
     key = strategy_name.strip().lower()
     overrides = search_overrides or {}
     override = SUGGEST_PARAMS_OVERRIDES.get(key)

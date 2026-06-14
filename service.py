@@ -25,12 +25,12 @@ class KlineRow(BaseModel):
     low: float
     close: float
     volume: float
-    close_time: Optional[int]
-    quote_asset_volume: Optional[float]
+    close_time: int | None
+    quote_asset_volume: float | None
     num_trades: int
-    taker_buy_base: Optional[float]
-    taker_buy_quote: Optional[float]
-    ignore_field: Optional[str]
+    taker_buy_base: float | None
+    taker_buy_quote: float | None
+    ignore_field: str | None
 
 
 @app.get("/health")
@@ -43,9 +43,9 @@ def get_klines(
     db: str = Query("klines.db", description="Ruta local al archivo sqlite"),
     symbol: str = Query(..., description="Símbolo de mercado, por ejemplo BTCUSDT"),
     interval: str = Query(..., description="Intervalo de kline, por ejemplo 1m o 1h"),
-    start_ts: Optional[int] = Query(None, description="Timestamp de inicio en ms"),
-    end_ts: Optional[int] = Query(None, description="Timestamp de fin en ms"),
-    limit: Optional[int] = Query(None, description="Número máximo de filas"),
+    start_ts: int | None = Query(None, description="Timestamp de inicio en ms"),
+    end_ts: int | None = Query(None, description="Timestamp de fin en ms"),
+    limit: int | None = Query(None, description="Número máximo de filas"),
 ) -> List[KlineRow]:
     try:
         rows = query_klines(db, symbol, interval, start_ts=start_ts, end_ts=end_ts, limit=limit)
@@ -74,8 +74,8 @@ def export_klines(
     db: str = Query("klines.db", description="Ruta local al archivo sqlite"),
     symbol: str = Query(..., description="Símbolo de mercado, por ejemplo BTCUSDT"),
     interval: str = Query(..., description="Intervalo de kline, por ejemplo 1m o 1h"),
-    start_ts: Optional[int] = Query(None, description="Timestamp de inicio en ms"),
-    end_ts: Optional[int] = Query(None, description="Timestamp de fin en ms"),
+    start_ts: int | None = Query(None, description="Timestamp de inicio en ms"),
+    end_ts: int | None = Query(None, description="Timestamp de fin en ms"),
     format: str = Query("csv", description="Formato de export: csv o json"),
 ) -> StreamingResponse:
     """Export rows matching query in `csv` or `json` format as a downloadable stream."""

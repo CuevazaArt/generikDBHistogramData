@@ -19,15 +19,15 @@ ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
-from backtest.data_feed import iter_candles_arrow_batches  # noqa: E402
-from backtest.engine import EngineConfig, run_backtest, run_backtest_streaming  # noqa: E402
-from backtest.strategies import SmaCrossStrategy  # noqa: E402
-from tests.test_engine_rs_parity import _build_candles  # noqa: E402
+from backtest.data_feed import iter_candles_arrow_batches
+from backtest.engine import EngineConfig, run_backtest, run_backtest_streaming
+from backtest.strategies import SmaCrossStrategy
+from tests.test_engine_rs_parity import _build_candles
 
 
 def _pyarrow_available() -> bool:
     try:
-        import pyarrow.parquet  # noqa: F401
+        import pyarrow.parquet
     except ImportError:
         return False
     return True

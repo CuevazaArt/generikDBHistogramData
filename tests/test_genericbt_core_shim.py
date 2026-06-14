@@ -29,7 +29,7 @@ if ROOT_DIR not in sys.path:
 def test_import_does_not_fail() -> None:
     """``import genericbt_core`` must work with or without the Rust wheel."""
 
-    import genericbt_core  # noqa: F401
+    import genericbt_core
 
     assert hasattr(genericbt_core, "run_backtest")
     assert hasattr(genericbt_core, "is_rust_available")

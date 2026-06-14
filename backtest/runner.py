@@ -14,7 +14,7 @@ def _parquet_events_enabled() -> bool:
     return os.getenv("BACKTEST_EVENTS_PARQUET", "0").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _resume_run_id_from_env() -> Optional[int]:
+def _resume_run_id_from_env() -> int | None:
     raw = os.getenv("BACKTEST_RESUME_RUN_ID", "").strip()
     if not raw:
         return None
@@ -72,9 +72,9 @@ def _emit_resume_audit(run_id: int, checkpoint_path: str) -> None:
 def execute_and_persist_resumable(
     config: EngineConfig,
     strategy_cls: Type[StrategyBase],
-    strategy_params: Optional[Dict] = None,
-    trial_id: Optional[int] = None,
-    initial_state: Optional[Dict] = None,
+    strategy_params: Dict | None = None,
+    trial_id: int | None = None,
+    initial_state: Dict | None = None,
     events_batch_size: int = 5000,
 ) -> BacktestResult:
     """Resume-aware variant of :func:`execute_and_persist`.
@@ -139,9 +139,9 @@ def execute_and_persist_resumable(
 def execute_and_persist(
     config: EngineConfig,
     strategy_cls: Type[StrategyBase],
-    strategy_params: Optional[Dict] = None,
-    trial_id: Optional[int] = None,
-    initial_state: Optional[Dict] = None,
+    strategy_params: Dict | None = None,
+    trial_id: int | None = None,
+    initial_state: Dict | None = None,
     events_batch_size: int = 5000,
 ) -> BacktestResult:
     init_db(config.db_path)

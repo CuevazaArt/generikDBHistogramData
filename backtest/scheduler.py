@@ -84,7 +84,7 @@ def _compute_max_concurrency(branches: int, cpu_cap_pct: float) -> int:
 def run_branches(
     cfg: SchedulerConfig,
     branches: List[BranchSpec],
-    progress_cb: Optional[Callable[[Dict[str, Any]], None]] = None,
+    progress_cb: Callable[[Dict[str, Any]], None] | None = None,
 ) -> List[Dict[str, Any]]:
     """Run branches in parallel, adapting concurrency to host pressure.
 

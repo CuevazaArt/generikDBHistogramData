@@ -13,7 +13,7 @@ import subprocess
 from typing import Any, Dict, Optional
 
 
-def _run_git(args: list[str], cwd: Optional[str]) -> Optional[str]:
+def _run_git(args: list[str], cwd: str | None) -> str | None:
     if shutil.which("git") is None:
         return None
     try:
@@ -32,7 +32,7 @@ def _run_git(args: list[str], cwd: Optional[str]) -> Optional[str]:
     return (out.stdout or "").strip()
 
 
-def git_snapshot(cwd: Optional[str] = None) -> Dict[str, Any]:
+def git_snapshot(cwd: str | None = None) -> Dict[str, Any]:
     """Return git commit SHA, branch and dirty flag of the current checkout.
 
     Designed to be safe to call from any backtest runner; never raises.

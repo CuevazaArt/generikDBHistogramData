@@ -19,15 +19,15 @@ ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
-from backtest.checkpoint import (  # noqa: E402
+from backtest.checkpoint import (
     Checkpoint,
     latest_checkpoint_path,
     read_checkpoint,
     write_checkpoint,
 )
-from backtest.engine import EngineConfig, run_backtest  # noqa: E402
-from backtest.strategies import SmaCrossStrategy  # noqa: E402
-from tests.test_engine_rs_parity import _build_candles  # noqa: E402
+from backtest.engine import EngineConfig, run_backtest
+from backtest.strategies import SmaCrossStrategy
+from tests.test_engine_rs_parity import _build_candles
 
 
 _CANONICAL_METRICS = (
@@ -65,7 +65,7 @@ def _base_config(**overrides: Any) -> EngineConfig:
     return cfg
 
 
-def test_checkpoint_roundtrip_json(tmp_path: "os.PathLike[str]") -> None:
+def test_checkpoint_roundtrip_json(tmp_path: os.PathLike[str]) -> None:
     """JSON read/write must preserve every field, including the tuple."""
     cp_path = os.path.join(str(tmp_path), "cp_42.json")
     original = Checkpoint(
@@ -98,7 +98,7 @@ def test_checkpoint_roundtrip_json(tmp_path: "os.PathLike[str]") -> None:
     assert loaded.engine_version == original.engine_version
 
 
-def test_latest_checkpoint_path_picks_highest_sim_ts(tmp_path: "os.PathLike[str]") -> None:
+def test_latest_checkpoint_path_picks_highest_sim_ts(tmp_path: os.PathLike[str]) -> None:
     base = str(tmp_path)
     # Intentionally out-of-order writes to verify ordering is by parsed int,
     # not by file mtime or lexicographic name.
@@ -128,7 +128,7 @@ def test_latest_checkpoint_path_handles_missing_dir() -> None:
     assert latest_checkpoint_path(os.path.join(tempfile.gettempdir(), "non_existent_dir_xyz")) is None
 
 
-def test_engine_writes_checkpoint(tmp_path: "os.PathLike[str]") -> None:
+def test_engine_writes_checkpoint(tmp_path: os.PathLike[str]) -> None:
     """Bar-threshold trigger fires at the expected cadence."""
     candles = _build_candles(500)
     cp_dir = str(tmp_path)
@@ -150,7 +150,7 @@ def test_engine_writes_checkpoint(tmp_path: "os.PathLike[str]") -> None:
     assert loaded.candle_offset >= 400, f"latest checkpoint offset too low: {loaded.candle_offset}"
 
 
-def test_engine_resume_continues(tmp_path: "os.PathLike[str]") -> None:
+def test_engine_resume_continues(tmp_path: os.PathLike[str]) -> None:
     """Resuming a 500-bar run from a mid-run checkpoint reproduces final equity."""
     candles_full = _build_candles(500)
 

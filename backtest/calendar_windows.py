@@ -28,10 +28,10 @@ from datetime import datetime, timezone
 from typing import List, Tuple
 
 __all__ = [
-    "month_start_ms",
-    "month_end_ms",
-    "monthly_windows",
     "format_window_name",
+    "month_end_ms",
+    "month_start_ms",
+    "monthly_windows",
 ]
 
 

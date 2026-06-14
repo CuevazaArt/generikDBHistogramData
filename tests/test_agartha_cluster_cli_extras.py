@@ -59,7 +59,7 @@ class _FakeDownloader:
 
 @pytest.fixture
 def fake_binance(monkeypatch):
-    import binance_hist_downloader  # noqa: F401  (ensure module is importable)
+    import binance_hist_downloader
 
     monkeypatch.setattr(
         cluster_cli, "_fetch_alpha_token_list_from_binance",

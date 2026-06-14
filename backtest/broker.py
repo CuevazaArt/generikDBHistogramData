@@ -25,7 +25,7 @@ class SpotBroker:
             return float(price) + slip
         return float(price) - slip
 
-    def execute_market(self, side: str, price: float, size_pct: float = 1.0) -> Optional[Dict]:
+    def execute_market(self, side: str, price: float, size_pct: float = 1.0) -> Dict | None:
         side = side.lower()
         if side not in ("buy", "sell"):
             return None

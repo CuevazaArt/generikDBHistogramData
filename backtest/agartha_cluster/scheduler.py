@@ -30,7 +30,7 @@ class SchedulerConfig:
     slot_seconds: int = 600                  # 10 min between deployments
     entry_weight_cost: int = 2               # signed REST place + book check
     entry_orders_cost: int = 1
-    enqueue_spacing_seconds: Optional[int] = None  # defaults to ``slot_seconds``
+    enqueue_spacing_seconds: int | None = None  # defaults to ``slot_seconds``
 
 
 class DeployScheduler:
@@ -41,7 +41,7 @@ class DeployScheduler:
         db: ClusterDB,
         throttle: ApiThrottle,
         events: EventLogger,
-        config: Optional[SchedulerConfig] = None,
+        config: SchedulerConfig | None = None,
     ):
         self.db = db
         self.throttle = throttle
@@ -55,7 +55,7 @@ class DeployScheduler:
         self,
         symbols: list[str],
         *,
-        start_ts_ms: Optional[int] = None,
+        start_ts_ms: int | None = None,
         priority: int = 100,
     ) -> list[int]:
         """Plan deployments spaced by ``slot_seconds`` starting at ``start_ts_ms``
@@ -93,7 +93,7 @@ class DeployScheduler:
     # ------------------------------------------------------------------
     # Per-tick decision
     # ------------------------------------------------------------------
-    def slot_open(self, *, now_ms: Optional[int] = None) -> bool:
+    def slot_open(self, *, now_ms: int | None = None) -> bool:
         """True if at least ``slot_seconds`` have passed since the last deploy."""
         last = self.db.last_deploy_ts()
         if last is None:
@@ -101,7 +101,7 @@ class DeployScheduler:
         now_ms = int(now_ms if now_ms is not None else _now_ms())
         return (now_ms - last) >= self.config.slot_seconds * 1000
 
-    def next_deploy_in_seconds(self, *, now_ms: Optional[int] = None) -> int:
+    def next_deploy_in_seconds(self, *, now_ms: int | None = None) -> int:
         """Seconds until the next slot opens. 0 if open now."""
         last = self.db.last_deploy_ts()
         if last is None:
@@ -111,7 +111,7 @@ class DeployScheduler:
         wait = self.config.slot_seconds - int(elapsed)
         return max(0, wait)
 
-    def pick_next(self, *, now_ms: Optional[int] = None):
+    def pick_next(self, *, now_ms: int | None = None):
         """Return a queue Row when ready, else None.
 
         Three gating checks (in order):
