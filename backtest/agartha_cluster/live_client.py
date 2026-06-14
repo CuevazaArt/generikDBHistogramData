@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import math
 import random
+import sys
 import time
 import uuid
 import hmac
@@ -29,6 +30,9 @@ import requests
 import websockets
 
 from backtest.agartha_cluster.models import OrderSide, OrderType
+
+# Retriable HTTP status codes for _rest_with_retry
+_RETRIABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 
 
 def _now_ms() -> int:
@@ -373,6 +377,62 @@ class BinanceAlphaClient:
                 except Exception:
                     pass
 
+    def _rest_with_retry(
+        self,
+        fn: Callable[[], requests.Response],
+        *,
+        max_retries: int = 3,
+        base_delay: float = 1.0,
+        max_delay: float = 15.0,
+        label: str = "REST",
+    ) -> requests.Response:
+        """Execute *fn* with retry + exponential backoff on transient errors.
+
+        Retries on:
+          - ``requests.Timeout``
+          - ``requests.ConnectionError``
+          - HTTP 429, 500, 502, 503, 504
+
+        Does NOT retry on 400, 401, 403 (client/auth errors).
+        Respects ``Retry-After`` header when present.
+        """
+        last_exc: Optional[Exception] = None
+        for attempt in range(max_retries + 1):
+            try:
+                r = fn()
+                if r.status_code not in _RETRIABLE_STATUS_CODES:
+                    return r
+                # Retriable HTTP status — treat as transient.
+                if attempt >= max_retries:
+                    return r  # return the last response as-is
+                retry_after = r.headers.get("Retry-After")
+                if retry_after:
+                    try:
+                        delay = min(float(retry_after), max_delay)
+                    except ValueError:
+                        delay = min(base_delay * (2 ** attempt), max_delay)
+                else:
+                    delay = min(base_delay * (2 ** attempt), max_delay)
+                print(
+                    f"[agartha][{label}] HTTP {r.status_code}, retry "
+                    f"{attempt + 1}/{max_retries} in {delay:.1f}s",
+                    file=sys.stderr, flush=True,
+                )
+                time.sleep(delay)
+            except (requests.Timeout, requests.ConnectionError) as e:
+                last_exc = e
+                if attempt >= max_retries:
+                    raise
+                delay = min(base_delay * (2 ** attempt), max_delay)
+                print(
+                    f"[agartha][{label}] {type(e).__name__}, retry "
+                    f"{attempt + 1}/{max_retries} in {delay:.1f}s",
+                    file=sys.stderr, flush=True,
+                )
+                time.sleep(delay)
+        # Should not reach here, but satisfy the type checker.
+        raise last_exc  # type: ignore[misc]
+
     def _send_signed_request(
         self, method: str, path: str, params: dict
     ) -> requests.Response:
@@ -405,7 +465,10 @@ class BinanceAlphaClient:
 
     def get_filters(self, symbol: str) -> dict:
         url = f"{self.base_url}/api/v3/exchangeInfo"
-        r = requests.get(url, params={"symbol": symbol}, timeout=10)
+        r = self._rest_with_retry(
+            lambda: requests.get(url, params={"symbol": symbol}, timeout=10),
+            label="get_filters",
+        )
         self._reconcile_weight(r)
         r.raise_for_status()
         data = r.json()
@@ -446,7 +509,10 @@ class BinanceAlphaClient:
 
     def get_price(self, symbol: str) -> float:
         url = f"{self.base_url}/api/v3/ticker/price"
-        r = requests.get(url, params={"symbol": symbol}, timeout=10)
+        r = self._rest_with_retry(
+            lambda: requests.get(url, params={"symbol": symbol}, timeout=10),
+            label="get_price",
+        )
         self._reconcile_weight(r)
         r.raise_for_status()
         return float(r.json()["price"])
@@ -572,7 +638,10 @@ class BinanceAlphaClient:
         }
         start_time = time.time()
         try:
-            r = self._send_signed_request("GET", "/api/v3/order", params)
+            r = self._rest_with_retry(
+                lambda: self._send_signed_request("GET", "/api/v3/order", params),
+                label="query_order",
+            )
             latency = int((time.time() - start_time) * 1000)
             if r.status_code == 200:
                 data = r.json()
@@ -618,7 +687,10 @@ class BinanceAlphaClient:
 
     def get_account(self) -> AccountSnapshot:
         try:
-            r_acct = self._send_signed_request("GET", "/api/v3/account", {})
+            r_acct = self._rest_with_retry(
+                lambda: self._send_signed_request("GET", "/api/v3/account", {}),
+                label="get_account",
+            )
             r_acct.raise_for_status()
             acct_data = r_acct.json()
 
@@ -703,7 +775,11 @@ class BinanceAlphaClient:
             )
             r.raise_for_status()
             self._listen_key = r.json()["listenKey"]
-        except Exception:
+        except Exception as e:
+            print(
+                f"[agartha][WS] Failed to obtain listen key: {e}",
+                file=sys.stderr, flush=True,
+            )
             return
 
         self._keepalive_task = self._ws_loop.create_task(
@@ -711,19 +787,39 @@ class BinanceAlphaClient:
         )
 
         ws_url = f"wss://stream.binance.com:9443/ws/{self._listen_key}"
+        backoff = 5.0  # initial reconnect delay (seconds)
+        _MAX_BACKOFF = 60.0
+        _BASE_BACKOFF = 5.0
         while self._ws_running:
             try:
                 async with websockets.connect(ws_url) as websocket:
+                    backoff = _BASE_BACKOFF  # reset on successful connect
+                    print(
+                        "[agartha][WS] userDataStream connected",
+                        file=sys.stderr, flush=True,
+                    )
                     while self._ws_running:
                         msg_str = await websocket.recv()
                         msg = json.loads(msg_str)
                         self._handle_ws_message(msg)
-            except websockets.exceptions.ConnectionClosed:
+            except websockets.exceptions.ConnectionClosed as e:
                 if self._ws_running:
-                    await asyncio.sleep(5)
-            except Exception:
+                    print(
+                        f"[agartha][WS] ConnectionClosed ({e}), "
+                        f"reconnecting in {backoff:.0f}s",
+                        file=sys.stderr, flush=True,
+                    )
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, _MAX_BACKOFF)
+            except Exception as e:
                 if self._ws_running:
-                    await asyncio.sleep(5)
+                    print(
+                        f"[agartha][WS] Error ({type(e).__name__}: {e}), "
+                        f"reconnecting in {backoff:.0f}s",
+                        file=sys.stderr, flush=True,
+                    )
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, _MAX_BACKOFF)
 
         if self._keepalive_task:
             self._keepalive_task.cancel()
@@ -739,8 +835,11 @@ class BinanceAlphaClient:
                     headers=headers,
                     timeout=10,
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                print(
+                    f"[agartha][WS] listen key keepalive failed: {e}",
+                    file=sys.stderr, flush=True,
+                )
 
     def _handle_ws_message(self, msg: dict) -> None:
         if msg.get("e") == "executionReport" and msg.get("x") == "TRADE":
@@ -777,5 +876,13 @@ class BinanceAlphaClient:
                         exchange_fill_id=exchange_fill_id,
                         raw_payload=json.dumps(msg),
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    # CRITICAL: Never silently swallow a fill callback error.
+                    # The reconciler's periodic poll will catch missed fills,
+                    # but we must at least log the failure for forensics.
+                    print(
+                        f"[agartha][WS] FILL CALLBACK ERROR: {type(e).__name__}: {e} "
+                        f"| order={client_order_id} symbol={symbol} side={side_str} "
+                        f"price={price} qty={qty}",
+                        file=sys.stderr, flush=True,
+                    )

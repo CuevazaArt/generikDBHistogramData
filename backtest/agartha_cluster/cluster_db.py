@@ -936,6 +936,29 @@ class ClusterDB:
         ).fetchone()
         return int(row["n"] if row else 0)
 
+    def sum_fills_for_order(self, order_pk: int) -> tuple[float, float, float]:
+        """Aggregate all fills for an order.
+
+        Returns ``(total_qty, vwap_price, total_fee)``.  VWAP is
+        volume-weighted average price = sum(price*qty) / sum(qty).
+        Returns ``(0.0, 0.0, 0.0)`` if no fills exist.
+        """
+        conn = self.connect()
+        row = conn.execute(
+            """
+            SELECT COALESCE(SUM(qty), 0.0)         AS total_qty,
+                   COALESCE(SUM(price * qty), 0.0)  AS notional,
+                   COALESCE(SUM(fee), 0.0)           AS total_fee
+            FROM fills WHERE order_pk = ?
+            """,
+            (int(order_pk),),
+        ).fetchone()
+        total_qty = float(row["total_qty"])
+        notional = float(row["notional"])
+        total_fee = float(row["total_fee"])
+        vwap = notional / total_qty if total_qty > 0 else 0.0
+        return (total_qty, vwap, total_fee)
+
     def purge_throttle_buckets_older_than(self, *, before_minute_bucket: int) -> int:
         """Delete throttle buckets whose ``minute_bucket`` is older than the
         given threshold (UNIX-minute units). Returns the row count deleted.

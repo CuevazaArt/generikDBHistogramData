@@ -504,9 +504,13 @@ class BotRunner:
         bot = self.db.get_bot(bot_id)
         if bot is None:
             return
+
+        order_pk = int(row["order_pk"])
+        original_order_qty = float(row["qty"])
+
         self.db.insert_fill(
             bot_id=bot_id,
-            order_pk=int(row["order_pk"]),
+            order_pk=order_pk,
             exchange_fill_id=exchange_fill_id,
             symbol=symbol,
             side=side,
@@ -519,43 +523,74 @@ class BotRunner:
             correlation_id=bot.correlation_id,
             raw_payload=raw_payload,
         )
+
+        # Aggregate ALL fills for this order to get the true cumulative
+        # position.  This is correct even for single-fill orders (the
+        # common case) and handles partial fills transparently.
+        total_filled, vwap_price, total_fee = self.db.sum_fills_for_order(order_pk)
+
+        # Determine if the order is fully filled.  We use a small
+        # tolerance (0.5% of order qty) to handle rounding differences
+        # between the exchange's step_size and our local float math.
+        is_fully_filled = total_filled >= original_order_qty * 0.995
+
+        # Update order state: PARTIALLY_FILLED or FILLED.
+        order_state = OrderState.FILLED if is_fully_filled else OrderState.PARTIALLY_FILLED
         self.db.update_order_state(
             client_order_id=client_order_id,
-            state=OrderState.FILLED,
-            filled_qty=float(qty),
-            avg_fill_price=float(price),
+            state=order_state,
+            filled_qty=total_filled,
+            avg_fill_price=vwap_price,
         )
+
         self.events.info(
-            kind=EventKind.ORDER_FILLED,
+            kind=EventKind.ORDER_FILLED if is_fully_filled else EventKind.ORDER_PARTIALLY_FILLED,
             source=EventSource.BINANCE_WS,
             bot_id=bot_id,
             symbol=symbol,
             correlation_id=bot.correlation_id,
-            payload={"side": side.value, "price": price, "qty": qty, "fee": fee},
+            payload={
+                "side": side.value,
+                "fill_price": price,
+                "fill_qty": qty,
+                "total_filled": total_filled,
+                "vwap_price": vwap_price,
+                "order_qty": original_order_qty,
+                "is_fully_filled": is_fully_filled,
+                "fee": fee,
+                "total_fee": total_fee,
+            },
         )
 
         if side == OrderSide.BUY:
             self.db.update_bot(
                 bot_id,
                 entry_filled_ts=ts_ms,
-                entry_price=float(price),
-                entry_qty=float(qty),
-                peak_price=float(price),
+                entry_price=vwap_price,
+                entry_qty=total_filled,
+                peak_price=max(float(bot.peak_price or 0.0), vwap_price),
             )
-            self._transition_bot(bot, BotState.IN_POSITION, reason="entry_filled")
+            if is_fully_filled:
+                self._transition_bot(bot, BotState.IN_POSITION, reason="entry_filled")
+            # else: stay in AWAITING_ENTRY_FILL until fully filled
         else:
             entry_price = float(bot.entry_price or 0.0)
-            pnl = (float(price) - entry_price) * float(qty)
+            pnl = (vwap_price - entry_price) * total_filled
             self.db.update_bot(
                 bot_id,
                 exit_filled_ts=ts_ms,
-                exit_price=float(price),
-                exit_qty=float(qty),
+                exit_price=vwap_price,
+                exit_qty=total_filled,
                 realized_pnl_usdt=pnl,
-                closed_at=time.strftime("%Y-%m-%d %H:%M:%S"),
             )
-            target_state = BotState.CLOSED_WIN if pnl >= 0 else BotState.CLOSED_LOSS
-            self._transition_bot(bot, target_state, reason="exit_filled")
+            if is_fully_filled:
+                self.db.update_bot(
+                    bot_id,
+                    closed_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+                )
+                target_state = BotState.CLOSED_WIN if pnl >= 0 else BotState.CLOSED_LOSS
+                self._transition_bot(bot, target_state, reason="exit_filled")
+            # else: stay in AWAITING_EXIT_FILL until fully filled
 
     # ------------------------------------------------------------------
     # Internal helpers
