@@ -32,6 +32,7 @@ from backtest.agartha_cluster.models import (
 )
 from backtest.agartha_cluster.reconciler import Reconciler
 from backtest.agartha_cluster.scheduler import DeployScheduler, SchedulerConfig
+from backtest.agartha_cluster.notifier import try_create_notifier
 
 DEFAULT_DB = "cluster.db"
 DEFAULT_LOG_DIR = "logs/agartha_cluster"
@@ -61,6 +62,7 @@ def _build_service(
     slot_seconds: int,
     mode: str,
     log_dir: str,
+    notifier=None,
 ) -> ClusterService:
     events = EventLogger(db, jsonl_dir=log_dir, echo_stdout=True)
     throttle = ApiThrottle(db, ThrottleConfig())
@@ -86,6 +88,7 @@ def _build_service(
             mode=mode,
             capital_usdt_per_bot=capital_usdt,
         ),
+        notifier=notifier,
     )
     return service
 
@@ -431,16 +434,29 @@ def cmd_creds(args: argparse.Namespace) -> int:
 def cmd_live_up(args: argparse.Namespace) -> int:
     import signal
 
+    from dotenv import load_dotenv
+    load_dotenv()
+
     db = ClusterDB(args.db)
     db.init_schema()
     client = _build_client(args.dry_run, db)
+
+    mode = "dry-run" if args.dry_run else "live"
+
+    # -- Telegram notifier (opt-out with --no-telegram) --
+    notifier = None
+    if not getattr(args, "no_telegram", False):
+        from backtest.agartha_cluster.cluster_service import CLUSTER_VERSION
+        notifier = try_create_notifier(db, cluster_version=CLUSTER_VERSION, mode=mode)
+
     service = _build_service(
         db=db,
         client=client,
         capital_usdt=args.capital_usdt,
         slot_seconds=args.slot_seconds,
-        mode="dry-run" if args.dry_run else "live",
+        mode=mode,
         log_dir=args.log_dir,
+        notifier=notifier,
     )
 
     def handle_shutdown_signal(sig, frame):
@@ -735,6 +751,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--capital-usdt", type=float, default=10.0)
     sp.add_argument("--slot-seconds", type=int, default=600)
     sp.add_argument("--ticks", type=int, default=0, help=">0 runs that many ticks and exits.")
+    sp.add_argument("--no-telegram", action="store_true", help="Disable Telegram notifier.")
     sp.set_defaults(func=cmd_live_up)
 
     sp = sub.add_parser("supervisor", help="Supervisor commands.")

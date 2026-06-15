@@ -64,6 +64,7 @@ class ClusterService:
         runner: BotRunner,
         reconciler: Reconciler,
         config: ServiceConfig | None = None,
+        notifier=None,
     ):
         self.db = db
         self.client = client
@@ -73,6 +74,7 @@ class ClusterService:
         self.runner = runner
         self.reconciler = reconciler
         self.config = config or ServiceConfig()
+        self.notifier = notifier
         self._stop = False
         # Initialise to "now" so the first reconcile and the first WAL
         # checkpoint happen after the configured interval, not on the
@@ -115,6 +117,9 @@ class ClusterService:
 
         if hasattr(self.client, "start_user_data_stream"):
             self.client.start_user_data_stream(self.runner.on_fill)
+
+        if self.notifier is not None:
+            self.notifier.start()
 
     # ------------------------------------------------------------------
     # Crash-recovery sweep
@@ -167,6 +172,12 @@ class ClusterService:
                     "host": r["host"],
                 },
             )
+            if self.notifier is not None:
+                self.notifier.send_alert(
+                    f"Crash anterior detectado.\n"
+                    f"Run ID: {r['run_id']}, PID: {r['pid']}, "
+                    f"Host: {r['host']}, Inicio: {r['started_at']}"
+                )
 
         # 2. Re-query open orders and replay missed fills via the reconciler
         #    (same code path that runs every reconcile tick).
@@ -219,6 +230,8 @@ class ClusterService:
             source=EventSource.SERVICE,
             payload={"reason": reason},
         )
+        if self.notifier is not None:
+            self.notifier.stop()
 
     def request_stop(self) -> None:
         self._stop = True

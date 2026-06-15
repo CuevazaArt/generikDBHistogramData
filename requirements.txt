@@ -1,6 +1,9 @@
 fastapi
 uvicorn[standard]
 requests
+python-binance>=1.0.0
+python-dotenv>=1.0.0
+python-binance>=1.0.0
 python-dateutil
 tqdm
 optuna
